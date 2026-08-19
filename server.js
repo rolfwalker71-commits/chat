@@ -5,7 +5,7 @@
  *
  * Architektur-Überblick:
  *   - Express liefert das Frontend (public/) und REST-Endpunkte (Auth, Profil,
- *     Nutzerliste, Unterhaltungen, Uploads).
+ *     Nutzerliste, Unterhaltungen, Uploads, Admin-Benutzerverwaltung).
  *   - Socket.io übernimmt den Echtzeit-Chat (global + private Räume).
  *   - PostgreSQL speichert Benutzer, Unterhaltungen, Nachrichten und Upload-Metadaten.
  *   - Dateien (Bilder, Sprache, Avatar) liegen im Docker-Volume `uploads/`,
@@ -37,6 +37,7 @@
  *   - SQL-Injection: ausschließlich parametrisierte Queries
  *   - Uploads: MIME-Allowlist per Magic-Bytes, Größenlimits, UUID-Dateinamen
  *     (kein Nutzer-Dateiname auf der Platte), X-Content-Type-Options: nosniff
+ *   - Neue Konten sind erst nach Admin-Freigabe schreibfähig (Lesen erlaubt)
  *   - Rate-Limiting auf Login/Registrierung und Uploads
  *   - Helmet-HTTP-Header
  * =============================================================================
@@ -74,6 +75,8 @@ const {
   AI_API_KEY = "",
   AI_BASE_URL = "https://api.openai.com/v1",
   AI_MODEL = "gpt-4o-mini",
+  ADMIN_USERNAME = "admin",
+  ADMIN_PASSWORD = "",
 } = process.env;
 
 const PORT = Number(APP_PORT) || 3355;
@@ -220,6 +223,34 @@ function requireAuth(req, res, next) {
   next();
 }
 
+async function requireApproved(req, res, next) {
+  try {
+    const row = await loadUserAuthRow(req.user.id);
+    if (!row) return sendError(res, 401, "Nicht angemeldet.");
+    if (!rowCanPost(row)) {
+      return sendError(res, 403, "Dein Konto wartet noch auf Freigabe durch einen Admin.");
+    }
+    next();
+  } catch (err) {
+    console.error("Freigabeprüfung fehlgeschlagen:", err);
+    return sendError(res, 500, "Freigabe konnte nicht geprüft werden.");
+  }
+}
+
+async function requireAdmin(req, res, next) {
+  try {
+    const row = await loadUserAuthRow(req.user.id);
+    if (!row) return sendError(res, 401, "Nicht angemeldet.");
+    if (!row.is_admin) {
+      return sendError(res, 403, "Kein Zugriff auf die Benutzerverwaltung.");
+    }
+    next();
+  } catch (err) {
+    console.error("Adminprüfung fehlgeschlagen:", err);
+    return sendError(res, 500, "Berechtigung konnte nicht geprüft werden.");
+  }
+}
+
 function sendError(res, status, message) {
   return res.status(status).json({ error: message });
 }
@@ -230,16 +261,33 @@ function parsePositiveInt(value) {
   return n;
 }
 
-function toPublicUser(row) {
+function toPublicUser(row, { includeAdmin = false } = {}) {
   if (!row) return null;
-  return {
+  const user = {
     id: row.id,
     username: row.username,
     realName: row.real_name || "",
     avatarUrl: row.avatar_url || "",
     isBot: Boolean(row.is_bot),
+    isApproved: row.is_approved !== false,
     lastSeenAt: row.last_seen_at ? row.last_seen_at.toISOString() : null,
   };
+  if (includeAdmin) user.isAdmin = Boolean(row.is_admin);
+  return user;
+}
+
+function toAdminUser(row) {
+  if (!row) return null;
+  return {
+    ...toPublicUser(row, { includeAdmin: true }),
+    createdAt: row.created_at ? row.created_at.toISOString() : null,
+    approvedAt: row.approved_at ? row.approved_at.toISOString() : null,
+  };
+}
+
+function rowCanPost(row) {
+  if (!row || row.is_bot) return false;
+  return Boolean(row.is_admin || row.is_approved);
 }
 
 function displayName(user) {
@@ -294,12 +342,28 @@ function likePattern(raw) {
   return `%${String(raw).replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_")}%`;
 }
 
-async function loadPublicUser(userId) {
+async function loadPublicUser(userId, { includeAdmin = false } = {}) {
   const { rows } = await pool.query(
-    `SELECT id, username, real_name, avatar_url, is_bot, last_seen_at FROM users WHERE id = $1`,
+    `SELECT id, username, real_name, avatar_url, is_bot, is_admin, is_approved, last_seen_at
+     FROM users WHERE id = $1`,
     [userId]
   );
-  return toPublicUser(rows[0]);
+  return toPublicUser(rows[0], { includeAdmin });
+}
+
+async function loadUserAuthRow(userId) {
+  const { rows } = await pool.query(
+    `SELECT id, username, is_bot, is_admin, is_approved FROM users WHERE id = $1`,
+    [userId]
+  );
+  return rows[0] || null;
+}
+
+async function countPendingUsers() {
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS n FROM users WHERE is_approved = FALSE AND is_bot = FALSE AND is_admin = FALSE`
+  );
+  return rows[0]?.n || 0;
 }
 
 function mapMessage(row) {
@@ -875,15 +939,20 @@ async function ensureAssistantBot() {
   const { rows } = await pool.query(`SELECT id FROM users WHERE username = $1`, [BOT_USERNAME]);
   if (rows[0]) {
     await pool.query(
-      `UPDATE users SET is_bot = TRUE, real_name = COALESCE(NULLIF(real_name, ''), 'Raum-Assistent') WHERE id = $1`,
+      `UPDATE users
+       SET is_bot = TRUE,
+           is_approved = TRUE,
+           approved_at = COALESCE(approved_at, NOW()),
+           real_name = COALESCE(NULLIF(real_name, ''), 'Raum-Assistent')
+       WHERE id = $1`,
       [rows[0].id]
     );
     return rows[0].id;
   }
   const passwordHash = await bcrypt.hash(crypto.randomBytes(32).toString("hex"), BCRYPT_ROUNDS);
   const inserted = await pool.query(
-    `INSERT INTO users (username, password_hash, real_name, is_bot)
-     VALUES ($1, $2, $3, TRUE)
+    `INSERT INTO users (username, password_hash, real_name, is_bot, is_approved, approved_at)
+     VALUES ($1, $2, $3, TRUE, TRUE, NOW())
      RETURNING id`,
     [BOT_USERNAME, passwordHash, "Raum-Assistent"]
   );
@@ -893,11 +962,51 @@ async function ensureAssistantBot() {
 
 async function loadBotUser() {
   const { rows } = await pool.query(
-    `SELECT id, username, real_name, avatar_url, is_bot, last_seen_at
+    `SELECT id, username, real_name, avatar_url, is_bot, is_admin, is_approved, last_seen_at
      FROM users WHERE username = $1 AND is_bot = TRUE`,
     [BOT_USERNAME]
   );
   return toPublicUser(rows[0]);
+}
+
+/** Legt das Admin-Konto aus ADMIN_USERNAME / ADMIN_PASSWORD an oder stuft es hoch. */
+async function ensureAdminUser() {
+  const username = sanitizeText(String(ADMIN_USERNAME || "admin")).toLowerCase();
+  if (!isValidUsername(username) || username === BOT_USERNAME) {
+    log("ADMIN_USERNAME ungültig — Admin-Konto wird nicht angelegt.");
+    return;
+  }
+
+  const { rows } = await pool.query(
+    `SELECT id, is_admin FROM users WHERE username = $1`,
+    [username]
+  );
+
+  if (rows[0]) {
+    await pool.query(
+      `UPDATE users
+       SET is_admin = TRUE, is_approved = TRUE, approved_at = COALESCE(approved_at, NOW())
+       WHERE id = $1`,
+      [rows[0].id]
+    );
+    if (!rows[0].is_admin) {
+      log(`Bestehendes Konto „${username}“ wurde zum Admin gemacht.`);
+    }
+    return;
+  }
+
+  if (!isValidPassword(ADMIN_PASSWORD)) {
+    log("Kein Admin-Konto: ADMIN_PASSWORD in der .env setzen (mindestens 8 Zeichen).");
+    return;
+  }
+
+  const passwordHash = await bcrypt.hash(ADMIN_PASSWORD, BCRYPT_ROUNDS);
+  await pool.query(
+    `INSERT INTO users (username, password_hash, real_name, is_admin, is_approved, approved_at)
+     VALUES ($1, $2, $3, TRUE, TRUE, NOW())`,
+    [username, passwordHash, "Administrator"]
+  );
+  log(`Admin-Konto „${username}“ angelegt.`);
 }
 
 // ---------------------------------------------------------------------------
@@ -919,6 +1028,15 @@ async function initDatabase() {
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS global_last_read_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS global_last_read_message_id INTEGER`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ`);
+  // Bestehende Konten bleiben freigegeben; neue Inserts defaulten auf ausstehend.
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_approved BOOLEAN NOT NULL DEFAULT TRUE`);
+  await pool.query(`ALTER TABLE users ALTER COLUMN is_approved SET DEFAULT FALSE`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS approved_by INTEGER REFERENCES users(id) ON DELETE SET NULL`);
+  await pool.query(
+    `UPDATE users SET approved_at = COALESCE(approved_at, created_at) WHERE is_approved = TRUE AND approved_at IS NULL`
+  );
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS conversations (
@@ -1140,10 +1258,13 @@ app.get("/health", async (_req, res) => {
 
 app.get("/api/me", requireAuth, async (req, res) => {
   try {
-    const user = await loadPublicUser(req.user.id);
+    const user = await loadPublicUser(req.user.id, { includeAdmin: true });
     if (!user) return sendError(res, 401, "Nicht angemeldet.");
     user.globalUnread = await countGlobalUnread(req.user.id);
     user.ai = aiStatusPayload();
+    if (user.isAdmin) {
+      user.pendingUsers = await countPendingUsers();
+    }
     return res.json(user);
   } catch (err) {
     console.error("Profil laden fehlgeschlagen:", err);
@@ -1171,11 +1292,11 @@ app.patch("/api/me", requireAuth, async (req, res) => {
 
     const { rows } = await pool.query(
       `UPDATE users SET real_name = $1, avatar_url = $2 WHERE id = $3
-       RETURNING id, username, real_name, avatar_url`,
+       RETURNING id, username, real_name, avatar_url, is_bot, is_admin, is_approved, last_seen_at`,
       [realName || null, avatarUrl || null, req.user.id]
     );
 
-    const user = toPublicUser(rows[0]);
+    const user = toPublicUser(rows[0], { includeAdmin: true });
     refreshConnectionProfiles(user);
     io.emit("user:updated", user);
     return res.json(user);
@@ -1200,6 +1321,10 @@ app.post("/api/register", authLimiter, async (req, res) => {
     if (username === BOT_USERNAME) {
       return sendError(res, 400, "Dieser Benutzername ist reserviert.");
     }
+    const adminName = sanitizeText(String(ADMIN_USERNAME || "admin")).toLowerCase();
+    if (username === adminName) {
+      return sendError(res, 400, "Dieser Benutzername ist reserviert.");
+    }
     if (!isValidPassword(password)) {
       return sendError(res, 400, `Passwort muss mindestens ${MIN_PASSWORD_LENGTH} Zeichen haben.`);
     }
@@ -1207,15 +1332,20 @@ app.post("/api/register", authLimiter, async (req, res) => {
     const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
 
     const { rows } = await pool.query(
-      `INSERT INTO users (username, password_hash)
-       VALUES ($1, $2)
-       RETURNING id, username, real_name, avatar_url`,
+      `INSERT INTO users (username, password_hash, is_approved)
+       VALUES ($1, $2, FALSE)
+       RETURNING id, username, real_name, avatar_url, is_bot, is_admin, is_approved, last_seen_at, created_at`,
       [username, passwordHash]
     );
 
-    const user = toPublicUser(rows[0]);
+    const user = toPublicUser(rows[0], { includeAdmin: true });
     res.cookie(COOKIE_NAME, signToken(user), cookieOptions());
-    log(`Registrierung: ${user.username}`);
+    log(`Registrierung (ausstehend): ${user.username}`);
+    emitToAdmins("admin:users-changed", {
+      action: "register",
+      user: toAdminUser(rows[0]),
+      pendingUsers: await countPendingUsers(),
+    });
     return res.status(201).json(user);
   } catch (err) {
     if (err.code === "23505") {
@@ -1236,7 +1366,7 @@ app.post("/api/login", authLimiter, async (req, res) => {
     }
 
     const { rows } = await pool.query(
-      `SELECT id, username, password_hash, real_name, avatar_url, is_bot, last_seen_at FROM users WHERE username = $1`,
+      `SELECT id, username, password_hash, real_name, avatar_url, is_bot, is_admin, is_approved, last_seen_at FROM users WHERE username = $1`,
       [username]
     );
 
@@ -1246,9 +1376,17 @@ app.post("/api/login", authLimiter, async (req, res) => {
       return sendError(res, 401, "Ungültige Anmeldedaten.");
     }
 
-    const user = toPublicUser(userRow);
+    const adminOnly = Boolean(req.body?.admin);
+    if (adminOnly && !userRow.is_admin) {
+      return sendError(res, 403, "Dieses Konto hat keine Admin-Rechte.");
+    }
+
+    const user = toPublicUser(userRow, { includeAdmin: true });
+    if (user.isAdmin) {
+      user.pendingUsers = await countPendingUsers();
+    }
     res.cookie(COOKIE_NAME, signToken(user), cookieOptions());
-    log(`Login: ${user.username}`);
+    log(`Login: ${user.username}${adminOnly ? " (Admin)" : ""}`);
     return res.json(user);
   } catch (err) {
     console.error("Login fehlgeschlagen:", err);
@@ -1266,11 +1404,105 @@ app.post("/api/logout", (_req, res) => {
   return res.json({ ok: true });
 });
 
+const ADMIN_USER_SELECT = `
+  id, username, real_name, avatar_url, is_bot, is_admin, is_approved, last_seen_at, created_at, approved_at
+`;
+
+app.get("/api/admin/users", requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `
+      SELECT ${ADMIN_USER_SELECT}
+      FROM users
+      WHERE is_bot = FALSE
+      ORDER BY is_approved ASC, created_at DESC, username ASC
+      `
+    );
+    return res.json({
+      users: rows.map(toAdminUser),
+      pendingUsers: rows.filter((row) => !row.is_approved && !row.is_admin).length,
+    });
+  } catch (err) {
+    console.error("Admin-Nutzerliste fehlgeschlagen:", err);
+    return sendError(res, 500, "Benutzer konnten nicht geladen werden.");
+  }
+});
+
+app.post("/api/admin/users/:id/approve", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const targetId = parsePositiveInt(req.params.id);
+    if (!targetId) return sendError(res, 400, "Ungültiger Benutzer.");
+
+    const { rows } = await pool.query(
+      `
+      UPDATE users
+      SET is_approved = TRUE, approved_at = NOW(), approved_by = $2
+      WHERE id = $1 AND is_bot = FALSE
+      RETURNING ${ADMIN_USER_SELECT}
+      `,
+      [targetId, req.user.id]
+    );
+    const user = toAdminUser(rows[0]);
+    if (!user) return sendError(res, 404, "Benutzer nicht gefunden.");
+
+    applyAccountStatus(user.id, { isApproved: true, isAdmin: user.isAdmin });
+    const pendingUsers = await countPendingUsers();
+    emitToAdmins("admin:users-changed", { action: "approve", user, pendingUsers });
+    log(`Admin ${req.user.username} hat ${user.username} freigegeben.`);
+    return res.json({ user, pendingUsers });
+  } catch (err) {
+    console.error("Freigabe fehlgeschlagen:", err);
+    return sendError(res, 500, "Benutzer konnte nicht freigegeben werden.");
+  }
+});
+
+app.post("/api/admin/users/:id/revoke", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const targetId = parsePositiveInt(req.params.id);
+    if (!targetId) return sendError(res, 400, "Ungültiger Benutzer.");
+    if (targetId === req.user.id) {
+      return sendError(res, 400, "Das eigene Konto kann nicht gesperrt werden.");
+    }
+
+    const { rows: currentRows } = await pool.query(
+      `SELECT is_admin, is_bot FROM users WHERE id = $1`,
+      [targetId]
+    );
+    const current = currentRows[0];
+    if (!current) return sendError(res, 404, "Benutzer nicht gefunden.");
+    if (current.is_bot) return sendError(res, 400, "Dieses Konto kann nicht gesperrt werden.");
+    if (current.is_admin) {
+      return sendError(res, 400, "Admin-Konten können nicht gesperrt werden.");
+    }
+
+    const { rows } = await pool.query(
+      `
+      UPDATE users
+      SET is_approved = FALSE, approved_at = NULL, approved_by = NULL
+      WHERE id = $1 AND is_bot = FALSE AND is_admin = FALSE
+      RETURNING ${ADMIN_USER_SELECT}
+      `,
+      [targetId]
+    );
+    const user = toAdminUser(rows[0]);
+    if (!user) return sendError(res, 404, "Benutzer nicht gefunden.");
+
+    applyAccountStatus(user.id, { isApproved: false, isAdmin: false });
+    const pendingUsers = await countPendingUsers();
+    emitToAdmins("admin:users-changed", { action: "revoke", user, pendingUsers });
+    log(`Admin ${req.user.username} hat ${user.username} gesperrt.`);
+    return res.json({ user, pendingUsers });
+  } catch (err) {
+    console.error("Sperre fehlgeschlagen:", err);
+    return sendError(res, 500, "Benutzer konnte nicht gesperrt werden.");
+  }
+});
+
 app.get("/api/users", requireAuth, async (req, res) => {
   try {
     const q = sanitizeText(String(req.query.q || "")).slice(0, 64);
     const params = [req.user.id];
-    let where = `id <> $1`;
+    let where = `id <> $1 AND is_approved = TRUE`;
     if (q) {
       params.push(likePattern(q.toLowerCase()));
       where += ` AND (username ILIKE $2 ESCAPE '\\' OR COALESCE(real_name, '') ILIKE $2 ESCAPE '\\')`;
@@ -1278,7 +1510,7 @@ app.get("/api/users", requireAuth, async (req, res) => {
 
     const { rows } = await pool.query(
       `
-      SELECT id, username, real_name, avatar_url, is_bot, last_seen_at
+      SELECT id, username, real_name, avatar_url, is_bot, is_admin, is_approved, last_seen_at
       FROM users
       WHERE ${where}
       ORDER BY username ASC
@@ -1303,7 +1535,7 @@ app.get("/api/conversations", requireAuth, async (req, res) => {
   }
 });
 
-app.post("/api/conversations", requireAuth, async (req, res) => {
+app.post("/api/conversations", requireAuth, requireApproved, async (req, res) => {
   try {
     const raw = Array.isArray(req.body?.usernames) ? req.body.usernames : [];
     const names = [
@@ -1322,7 +1554,8 @@ app.post("/api/conversations", requireAuth, async (req, res) => {
     }
 
     const { rows: userRows } = await pool.query(
-      `SELECT id, username, real_name, avatar_url FROM users WHERE username = ANY($1::text[])`,
+      `SELECT id, username, real_name, avatar_url FROM users
+       WHERE username = ANY($1::text[]) AND (is_approved = TRUE OR is_bot = TRUE)`,
       [names]
     );
     if (userRows.length !== names.length) {
@@ -1389,7 +1622,7 @@ app.get("/api/conversations/:id", requireAuth, async (req, res) => {
   }
 });
 
-app.patch("/api/conversations/:id", requireAuth, async (req, res) => {
+app.patch("/api/conversations/:id", requireAuth, requireApproved, async (req, res) => {
   try {
     const conversationId = parsePositiveInt(req.params.id);
     if (!conversationId) return sendError(res, 400, "Ungültige Unterhaltung.");
@@ -1411,7 +1644,7 @@ app.patch("/api/conversations/:id", requireAuth, async (req, res) => {
   }
 });
 
-app.post("/api/conversations/:id/members", requireAuth, async (req, res) => {
+app.post("/api/conversations/:id/members", requireAuth, requireApproved, async (req, res) => {
   try {
     const conversationId = parsePositiveInt(req.params.id);
     if (!conversationId) return sendError(res, 400, "Ungültige Unterhaltung.");
@@ -1427,7 +1660,8 @@ app.post("/api/conversations/:id/members", requireAuth, async (req, res) => {
       return sendError(res, 400, "Bitte eine andere Person angeben.");
     }
     const { rows: userRows } = await pool.query(
-      `SELECT id, username, real_name, avatar_url, is_bot, last_seen_at FROM users WHERE username = $1`,
+      `SELECT id, username, real_name, avatar_url, is_bot, is_approved, last_seen_at
+       FROM users WHERE username = $1 AND (is_approved = TRUE OR is_bot = TRUE)`,
       [username]
     );
     const invitee = userRows[0];
@@ -1740,7 +1974,7 @@ async function persistUpload({ userId, kind, buffer, durationMs, originalName })
   return { id, mime, kind, sizeBytes: buffer.length, durationMs: duration, name: cleanName };
 }
 
-app.post("/api/uploads", requireAuth, uploadLimiter, handleMulter, async (req, res) => {
+app.post("/api/uploads", requireAuth, requireApproved, uploadLimiter, handleMulter, async (req, res) => {
   try {
     const kind = sanitizeText(String(req.body?.kind || "")).toLowerCase();
     if (!["image", "voice", "file"].includes(kind)) {
@@ -1778,10 +2012,10 @@ app.post("/api/me/avatar", requireAuth, uploadLimiter, handleMulter, async (req,
     const avatarUrl = `/api/files/${saved.id}`;
     const { rows } = await pool.query(
       `UPDATE users SET avatar_url = $1 WHERE id = $2
-       RETURNING id, username, real_name, avatar_url`,
+       RETURNING id, username, real_name, avatar_url, is_bot, is_admin, is_approved, last_seen_at`,
       [avatarUrl, req.user.id]
     );
-    const user = toPublicUser(rows[0]);
+    const user = toPublicUser(rows[0], { includeAdmin: true });
     refreshConnectionProfiles(user);
     io.emit("user:updated", user);
     return res.json(user);
@@ -1854,7 +2088,7 @@ app.get("/", (_req, res) => {
 // Socket.io — Authentifizierung, Historie, Broadcast, Online-Liste, DMs
 // ---------------------------------------------------------------------------
 
-/** socket.id → { userId, username, realName, avatarUrl } */
+/** socket.id → { userId, username, realName, avatarUrl, isApproved, isAdmin } */
 const connections = new Map();
 /** conversationKey → Map(userId → { username, realName, timer }) */
 const typingByRoom = new Map();
@@ -1862,6 +2096,7 @@ const typingByRoom = new Map();
 function uniqueOnlineUsers() {
   const byId = new Map();
   for (const info of connections.values()) {
+    if (!info.isApproved && !info.isAdmin) continue;
     byId.set(info.userId, {
       id: info.userId,
       username: info.username,
@@ -1884,6 +2119,8 @@ function refreshConnectionProfiles(user) {
       info.username = user.username;
       info.realName = user.realName;
       info.avatarUrl = user.avatarUrl;
+      if (user.isApproved != null) info.isApproved = Boolean(user.isApproved);
+      if (user.isAdmin != null) info.isAdmin = Boolean(user.isAdmin);
     }
   }
   for (const socket of io.sockets.sockets.values()) {
@@ -1903,6 +2140,31 @@ function socketsForUser(userId) {
     }
   }
   return list;
+}
+
+function emitToAdmins(event, payload) {
+  for (const [sid, info] of connections) {
+    if (!info.isAdmin) continue;
+    const sock = io.sockets.sockets.get(sid);
+    if (sock) sock.emit(event, payload);
+  }
+}
+
+function applyAccountStatus(userId, { isApproved, isAdmin }) {
+  for (const sock of socketsForUser(userId)) {
+    sock.user = { ...sock.user, isApproved: Boolean(isApproved), isAdmin: Boolean(isAdmin) };
+    const info = connections.get(sock.id);
+    if (info) {
+      info.isApproved = Boolean(isApproved);
+      info.isAdmin = Boolean(isAdmin);
+    }
+    sock.emit("account:status", { isApproved: Boolean(isApproved), isAdmin: Boolean(isAdmin) });
+  }
+  broadcastOnlineUsers();
+}
+
+function socketCanPost(socket) {
+  return Boolean(socket.user?.isApproved || socket.user?.isAdmin);
 }
 
 async function addSocketsToConversation(memberIds, conversationId) {
@@ -2121,7 +2383,7 @@ io.on("connection", async (socket) => {
   const userId = socket.user.id;
   let profile;
   try {
-    profile = await loadPublicUser(userId);
+    profile = await loadPublicUser(userId, { includeAdmin: true });
   } catch (err) {
     console.error("Profil für Socket fehlgeschlagen:", err);
   }
@@ -2137,6 +2399,8 @@ io.on("connection", async (socket) => {
     username: profile.username,
     realName: profile.realName,
     avatarUrl: profile.avatarUrl,
+    isApproved: Boolean(profile.isApproved),
+    isAdmin: Boolean(profile.isAdmin),
   });
   await pool.query(`UPDATE users SET last_seen_at = NOW() WHERE id = $1`, [userId]);
 
@@ -2201,6 +2465,10 @@ io.on("connection", async (socket) => {
     const respond = typeof ack === "function" ? ack : () => {};
 
     try {
+      if (!socketCanPost(socket)) {
+        respond({ ok: false, error: "Dein Konto wartet noch auf Freigabe durch einen Admin." });
+        return;
+      }
       if (!allowMessage(socket)) {
         respond({ ok: false, error: "Zu viele Nachrichten in kurzer Zeit." });
         return;
@@ -2337,6 +2605,7 @@ io.on("connection", async (socket) => {
 
   socket.on("typing:start", async (payload) => {
     try {
+      if (!socketCanPost(socket)) return;
       if (!allowAction(socket, "typing", 2_000, 6)) return;
       const conversationId =
         payload?.conversationId == null || payload?.conversationId === ""
@@ -2367,6 +2636,10 @@ io.on("connection", async (socket) => {
   socket.on("reaction:toggle", async (payload, ack) => {
     const respond = typeof ack === "function" ? ack : () => {};
     try {
+      if (!socketCanPost(socket)) {
+        respond({ ok: false, error: "Dein Konto wartet noch auf Freigabe durch einen Admin." });
+        return;
+      }
       if (!allowAction(socket, "reaction", 5_000, 20)) {
         respond({ ok: false, error: "Zu viele Reaktionen in kurzer Zeit." });
         return;
@@ -2485,6 +2758,10 @@ io.on("connection", async (socket) => {
   socket.on("message:edit", async (payload, ack) => {
     const respond = typeof ack === "function" ? ack : () => {};
     try {
+      if (!socketCanPost(socket)) {
+        respond({ ok: false, error: "Dein Konto wartet noch auf Freigabe durch einen Admin." });
+        return;
+      }
       const messageId = parsePositiveInt(payload?.messageId);
       const content = sanitizeText(payload?.content || "");
       if (!messageId) {
@@ -2536,6 +2813,10 @@ io.on("connection", async (socket) => {
   socket.on("message:forward", async (payload, ack) => {
     const respond = typeof ack === "function" ? ack : () => {};
     try {
+      if (!socketCanPost(socket)) {
+        respond({ ok: false, error: "Dein Konto wartet noch auf Freigabe durch einen Admin." });
+        return;
+      }
       if (!allowMessage(socket)) {
         respond({ ok: false, error: "Zu viele Nachrichten in kurzer Zeit." });
         return;
@@ -2621,6 +2902,7 @@ async function start() {
   await fs.mkdir(UPLOAD_DIR, { recursive: true });
   await initDatabase();
   await ensureAssistantBot();
+  await ensureAdminUser();
 
   server.listen(PORT, "0.0.0.0", () => {
     log(`Chat-Server lauscht auf Port ${PORT} (${NODE_ENV})`);

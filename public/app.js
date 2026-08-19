@@ -28,6 +28,7 @@
   const formAuth = document.getElementById("form-auth");
   const tabLogin = document.getElementById("tab-login");
   const tabRegister = document.getElementById("tab-register");
+  const tabAdmin = document.getElementById("tab-admin");
   const wrapPasswordConfirm = document.getElementById("wrap-password-confirm");
   const inputUsername = document.getElementById("username");
   const inputPassword = document.getElementById("password");
@@ -44,6 +45,16 @@
   const chatError = document.getElementById("chat-error");
   const btnSend = document.getElementById("btn-send");
   const btnLogout = document.getElementById("btn-logout");
+  const btnAdmin = document.getElementById("btn-admin");
+  const adminPendingBadge = document.getElementById("admin-pending-badge");
+  const viewAdmin = document.getElementById("view-admin");
+  const btnAdminChat = document.getElementById("btn-admin-chat");
+  const btnAdminLogout = document.getElementById("btn-admin-logout");
+  const adminError = document.getElementById("admin-error");
+  const tabAdminPending = document.getElementById("tab-admin-pending");
+  const tabAdminAll = document.getElementById("tab-admin-all");
+  const adminUserList = document.getElementById("admin-user-list");
+  const pendingBanner = document.getElementById("pending-banner");
   const btnOnline = document.getElementById("btn-online");
   const btnOnlineClose = document.getElementById("btn-online-close");
   const onlineOverlay = document.getElementById("online-overlay");
@@ -132,9 +143,9 @@
   const btnForwardClose = document.getElementById("btn-forward-close");
   const forwardTargets = document.getElementById("forward-targets");
 
-  /** @type {"login" | "register"} */
+  /** @type {"login" | "register" | "admin"} */
   let authMode = "login";
-  /** @type {{ id: number, username: string, realName?: string, avatarUrl?: string } | null} */
+  /** @type {{ id: number, username: string, realName?: string, avatarUrl?: string, isAdmin?: boolean, isApproved?: boolean, pendingUsers?: number } | null} */
   let currentUser = null;
   /** @type {import("socket.io-client").Socket | null} */
   let socket = null;
@@ -162,6 +173,10 @@
   let voiceTranscript = "";
   const onlineIds = new Set();
   let notifyPermission = typeof Notification !== "undefined" ? Notification.permission : "denied";
+  /** @type {Array} */
+  let adminUsers = [];
+  /** @type {"pending" | "all"} */
+  let adminFilter = "pending";
 
   let mediaRecorder = null;
   let recordChunks = [];
@@ -254,30 +269,39 @@
   function setAuthMode(mode) {
     authMode = mode;
     const isRegister = mode === "register";
+    const isAdminLogin = mode === "admin";
 
-    tabLogin.setAttribute("aria-selected", String(!isRegister));
+    tabLogin.setAttribute("aria-selected", String(mode === "login"));
     tabRegister.setAttribute("aria-selected", String(isRegister));
+    tabAdmin.setAttribute("aria-selected", String(isAdminLogin));
 
-    tabLogin.className = pillClass(!isRegister);
+    tabLogin.className = pillClass(mode === "login");
     tabRegister.className = pillClass(isRegister);
+    tabAdmin.className = pillClass(isAdminLogin);
 
     wrapPasswordConfirm.classList.toggle("hidden", !isRegister);
     wrapPasswordConfirm.classList.toggle("flex", isRegister);
     inputPasswordConfirm.required = isRegister;
     inputPassword.autocomplete = isRegister ? "new-password" : "current-password";
-    authSubmit.textContent = isRegister ? "Konto anlegen" : "Anmelden";
+    authSubmit.textContent = isRegister
+      ? "Konto anlegen"
+      : isAdminLogin
+        ? "Als Admin anmelden"
+        : "Anmelden";
     showError(authError, "");
   }
 
   function pillClass(active) {
     const base =
-      "h-full min-h-0 max-h-full flex-1 rounded-full px-3 text-sm font-medium leading-none";
+      "h-full min-h-0 max-h-full flex-1 rounded-full px-2 text-xs font-medium leading-none sm:px-3 sm:text-sm";
     return active
       ? `${base} text-foreground shadow-sm shadow-black/40 bg-background`
       : `${base} text-muted-foreground`;
   }
 
   function showAuth() {
+    viewAdmin.classList.add("hidden");
+    viewAdmin.classList.remove("flex");
     viewAuth.classList.remove("hidden");
     viewChat.classList.add("hidden");
     viewChat.classList.remove("flex");
@@ -286,10 +310,49 @@
 
   function showChat() {
     viewAuth.classList.add("hidden");
+    viewAdmin.classList.add("hidden");
+    viewAdmin.classList.remove("flex");
     viewChat.classList.remove("hidden");
     viewChat.classList.add("flex");
     refreshSelfUi();
-    messageInput.focus();
+    if (canPost()) messageInput.focus();
+  }
+
+  function showAdmin() {
+    viewAuth.classList.add("hidden");
+    viewChat.classList.add("hidden");
+    viewChat.classList.remove("flex");
+    viewAdmin.classList.remove("hidden");
+    viewAdmin.classList.add("flex");
+    showError(adminError, "");
+    loadAdminUsers();
+  }
+
+  function canPost() {
+    return Boolean(currentUser && (currentUser.isApproved || currentUser.isAdmin));
+  }
+
+  function setComposerLocked(locked) {
+    formMessage.classList.toggle("hidden", locked);
+    pendingBanner.classList.toggle("hidden", !locked);
+    formSearchDesktop.classList.toggle("pointer-events-none", locked);
+    formSearchDesktop.classList.toggle("opacity-50", locked);
+    formSearchMobile.classList.toggle("pointer-events-none", locked);
+    formSearchMobile.classList.toggle("opacity-50", locked);
+    btnAssistantDesktop.disabled = locked;
+    btnAssistantMobile.disabled = locked;
+  }
+
+  function setAdminPendingBadge(count) {
+    const n = Number(count) || 0;
+    if (currentUser) currentUser.pendingUsers = n;
+    if (n > 0) {
+      adminPendingBadge.textContent = n > 99 ? "99+" : String(n);
+      adminPendingBadge.classList.remove("hidden");
+    } else {
+      adminPendingBadge.textContent = "";
+      adminPendingBadge.classList.add("hidden");
+    }
   }
 
   function refreshSelfUi() {
@@ -297,6 +360,11 @@
     labelUsername.textContent = displayName(currentUser);
     fillAvatar(headerAvatar, currentUser, "inline-flex h-8 w-8");
     fillAvatar(profileAvatarPreview, currentUser, "h-16 w-16");
+    const isAdmin = Boolean(currentUser.isAdmin);
+    btnAdmin.classList.toggle("hidden", !isAdmin);
+    btnAdmin.classList.toggle("inline-flex", isAdmin);
+    if (isAdmin) setAdminPendingBadge(currentUser.pendingUsers);
+    setComposerLocked(!canPost());
   }
 
   function sameRoom(conversationId) {
@@ -367,27 +435,32 @@
     }
 
     authSubmit.disabled = true;
-    authSubmit.textContent = authMode === "register" ? "Konto wird angelegt…" : "Anmeldung…";
+    authSubmit.textContent =
+      authMode === "register" ? "Konto wird angelegt…" : authMode === "admin" ? "Admin-Anmeldung…" : "Anmeldung…";
 
     try {
       const path = authMode === "register" ? "/api/register" : "/api/login";
+      const body = { username, password };
+      if (authMode === "admin") body.admin = true;
       currentUser = await api(path, {
         method: "POST",
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify(body),
       });
       const me = await api("/api/me");
       currentUser = { ...currentUser, ...me };
       aiStatus = me.ai || null;
       setGlobalUnread(me.globalUnread || 0);
       formAuth.reset();
-      showChat();
       await loadConversations();
       connectSocket();
+      if (authMode === "admin") showAdmin();
+      else showChat();
     } catch (err) {
       showError(authError, err.message);
     } finally {
       authSubmit.disabled = false;
-      authSubmit.textContent = authMode === "register" ? "Konto anlegen" : "Anmelden";
+      authSubmit.textContent =
+        authMode === "register" ? "Konto anlegen" : authMode === "admin" ? "Als Admin anmelden" : "Anmelden";
     }
   }
 
@@ -417,6 +490,9 @@
     setSearchPanel(false);
     setChatMenu(false);
     setForwardPanel(false);
+    adminUsers = [];
+    adminFilter = "pending";
+    setAdminFilter("pending");
     showAuth();
   }
 
@@ -425,6 +501,116 @@
       return timeFormatter.format(new Date(iso));
     } catch {
       return "";
+    }
+  }
+
+  function setAdminFilter(mode) {
+    adminFilter = mode;
+    tabAdminPending.setAttribute("aria-selected", String(mode === "pending"));
+    tabAdminAll.setAttribute("aria-selected", String(mode === "all"));
+    tabAdminPending.className = pillClass(mode === "pending");
+    tabAdminAll.className = pillClass(mode === "all");
+    renderAdminUsers();
+  }
+
+  function adminStatusLabel(user) {
+    if (user.isAdmin) return "Admin";
+    if (user.isApproved) return "Freigegeben";
+    return "Ausstehend";
+  }
+
+  function renderAdminUsers() {
+    adminUserList.replaceChildren();
+    const rows =
+      adminFilter === "pending"
+        ? adminUsers.filter((user) => !user.isApproved)
+        : adminUsers;
+
+    if (!rows.length) {
+      adminUserList.append(
+        el(
+          "li",
+          "rounded-2xl bg-card px-4 py-6 text-center text-sm leading-relaxed text-muted-foreground ring-1 ring-border",
+          adminFilter === "pending" ? "Keine ausstehenden Konten." : "Noch keine Benutzer."
+        )
+      );
+      return;
+    }
+
+    for (const user of rows) {
+      const item = el(
+        "li",
+        "flex flex-col gap-3 rounded-2xl bg-card p-4 ring-1 ring-border sm:flex-row sm:items-center"
+      );
+      const avatar = el("div", "");
+      fillAvatar(avatar, user, "h-12 w-12");
+      const text = el("div", "min-w-0 flex-1");
+      text.append(el("p", "break-words text-base font-semibold leading-snug", displayName(user)));
+      text.append(el("p", "text-sm text-muted-foreground", `@${user.username}`));
+      if (user.createdAt) {
+        text.append(el("p", "mt-1 text-xs text-muted-foreground", `Registriert ${formatTime(user.createdAt)}`));
+      }
+      const badgeClass = user.isAdmin
+        ? "bg-amber-500/20 text-amber-400"
+        : user.isApproved
+          ? "bg-emerald-500/15 text-emerald-300"
+          : "bg-muted text-muted-foreground";
+      const badge = el(
+        "span",
+        `inline-flex h-11 min-h-11 items-center rounded-full px-3 text-xs font-medium ${badgeClass}`,
+        adminStatusLabel(user)
+      );
+      const actions = el("div", "flex flex-wrap gap-2");
+      actions.append(badge);
+      if (!user.isApproved) {
+        const approve = el(
+          "button",
+          "inline-flex h-11 min-h-11 items-center rounded-xl bg-amber-500 px-3 text-sm font-semibold text-zinc-950 hover:bg-amber-400",
+          "Freigeben"
+        );
+        approve.type = "button";
+        approve.addEventListener("click", () => moderateUser(user.id, "approve"));
+        actions.append(approve);
+      } else if (!user.isAdmin && currentUser && user.id !== currentUser.id) {
+        const revoke = el(
+          "button",
+          "inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-sm font-medium text-red-200 ring-1 ring-red-900 hover:bg-red-950/60",
+          "Sperren"
+        );
+        revoke.type = "button";
+        revoke.addEventListener("click", () => moderateUser(user.id, "revoke"));
+        actions.append(revoke);
+      }
+      item.append(avatar, text, actions);
+      adminUserList.append(item);
+    }
+  }
+
+  async function loadAdminUsers() {
+    if (!currentUser?.isAdmin) return;
+    showError(adminError, "");
+    try {
+      const data = await api("/api/admin/users");
+      adminUsers = data.users || [];
+      setAdminPendingBadge(data.pendingUsers);
+      renderAdminUsers();
+    } catch (err) {
+      showError(adminError, err.message);
+    }
+  }
+
+  async function moderateUser(userId, action) {
+    showError(adminError, "");
+    try {
+      const data = await api(`/api/admin/users/${userId}/${action}`, { method: "POST" });
+      const updated = data.user;
+      if (updated) {
+        adminUsers = adminUsers.map((user) => (user.id === updated.id ? { ...user, ...updated } : user));
+      }
+      setAdminPendingBadge(data.pendingUsers);
+      renderAdminUsers();
+    } catch (err) {
+      showError(adminError, err.message);
     }
   }
 
@@ -602,6 +788,10 @@
   }
 
   async function openAssistant() {
+    if (!canPost()) {
+      showError(chatError, "Dein Konto wartet noch auf Freigabe durch einen Admin.");
+      return;
+    }
     try {
       const conv = await api("/api/conversations", {
         method: "POST",
@@ -1202,6 +1392,10 @@
   }
 
   async function startConversationWith(usernames) {
+    if (!canPost()) {
+      showError(chatError, "Dein Konto wartet noch auf Freigabe durch einen Admin.");
+      return;
+    }
     const names = [...new Set(usernames.map((n) => n.toLowerCase()))];
     if (!names.length) return;
     try {
@@ -1497,6 +1691,28 @@
       updateRoomHeader();
     });
 
+    socket.on("account:status", (payload) => {
+      if (!currentUser) return;
+      currentUser.isApproved = Boolean(payload?.isApproved);
+      if (payload?.isAdmin != null) currentUser.isAdmin = Boolean(payload.isAdmin);
+      refreshSelfUi();
+    });
+
+    socket.on("admin:users-changed", (payload) => {
+      if (!currentUser?.isAdmin) return;
+      setAdminPendingBadge(payload?.pendingUsers);
+      if (!viewAdmin.classList.contains("hidden")) {
+        if (payload?.user) {
+          const idx = adminUsers.findIndex((user) => user.id === payload.user.id);
+          if (idx >= 0) adminUsers[idx] = { ...adminUsers[idx], ...payload.user };
+          else adminUsers.unshift(payload.user);
+          renderAdminUsers();
+        } else {
+          loadAdminUsers();
+        }
+      }
+    });
+
     socket.on("chat:error", (message) => {
       showError(chatError, message);
     });
@@ -1526,6 +1742,10 @@
   async function handleSend(event) {
     event.preventDefault();
     showError(chatError, "");
+    if (!canPost()) {
+      showError(chatError, "Dein Konto wartet noch auf Freigabe durch einen Admin.");
+      return;
+    }
     if (mediaRecorder) return;
 
     const content = messageInput.value.trim();
@@ -1878,9 +2098,15 @@
 
   tabLogin.addEventListener("click", () => setAuthMode("login"));
   tabRegister.addEventListener("click", () => setAuthMode("register"));
+  tabAdmin.addEventListener("click", () => setAuthMode("admin"));
   formAuth.addEventListener("submit", handleAuthSubmit);
   formMessage.addEventListener("submit", handleSend);
   btnLogout.addEventListener("click", handleLogout);
+  btnAdmin.addEventListener("click", showAdmin);
+  btnAdminChat.addEventListener("click", showChat);
+  btnAdminLogout.addEventListener("click", handleLogout);
+  tabAdminPending.addEventListener("click", () => setAdminFilter("pending"));
+  tabAdminAll.addEventListener("click", () => setAdminFilter("all"));
   btnOnline.addEventListener("click", () => setOnlinePanel(true));
   btnOnlineClose.addEventListener("click", () => setOnlinePanel(false));
   onlineBackdrop.addEventListener("click", () => setOnlinePanel(false));
