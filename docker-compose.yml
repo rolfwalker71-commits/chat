@@ -1,0 +1,69 @@
+# =============================================================================
+# Docker Compose — Chat-Anwendung + PostgreSQL
+#
+# Wichtig: Der Datenbank-Service veröffentlicht KEINEN Host-Port.
+# PostgreSQL ist nur über das interne Netz unter dem Hostnamen "db" erreichbar.
+# Persistenz: Named Volume "postgres_data" überlebt Container-Neustarts.
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 16 — ausschließlich intern, Healthcheck für geordneten Start
+  # ---------------------------------------------------------------------------
+  db:
+    image: postgres:16-alpine
+    container_name: chat-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      # Daten bleiben erhalten, auch wenn der Container neu erstellt wird.
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - chat_internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    # Kein `ports:` — bewusst nicht nach außen exponiert.
+
+  # ---------------------------------------------------------------------------
+  # Node.js-App (Express + Socket.io) — einziger nach außen offener Dienst
+  # ---------------------------------------------------------------------------
+  app:
+    # GHCR-Image; `docker compose up --build` baut lokal und taggt denselben Namen.
+    image: ghcr.io/rolfwalker71-commits/chat:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    pull_policy: missing
+    container_name: chat-app
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Interner Listen-Port muss zum Healthcheck und zum rechten Mapping-Wert passen.
+      APP_PORT: "3355"
+      # Compose-Interpolation: Host "db" ist der Service-Name im internen Netz.
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+    ports:
+      # Nur die App ist vom Host erreichbar (Standard: http://localhost:3355).
+      - "${APP_PORT:-3355}:3355"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - chat_internal
+
+# Persistentes Volume für PostgreSQL-Datenverzeichnis
+volumes:
+  postgres_data:
+
+# Isoliertes Bridge-Netz: App und DB sehen sich, die DB hat kein Host-Mapping.
+networks:
+  chat_internal:
+    driver: bridge

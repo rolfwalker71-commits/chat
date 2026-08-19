@@ -1,0 +1,15 @@
+# Abhängigkeiten
+node_modules/
+
+# Secrets — niemals committen
+.env
+
+# Logs und OS-Artefakte
+*.log
+npm-debug.log*
+.DS_Store
+
+# Editor
+.idea/
+.vscode/
+*.swp

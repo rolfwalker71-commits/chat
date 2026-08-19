@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="de" class="h-full dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#09090b" />
+    <meta name="description" content="Gemeinsamer Echtzeit-Chatraum" />
+    <title>Raum — Chat</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ["Outfit", "ui-sans-serif", "system-ui", "sans-serif"],
+            },
+            colors: {
+              background: "#09090b",
+              foreground: "#fafafa",
+              muted: "#27272a",
+              "muted-foreground": "#a1a1aa",
+              card: "#18181b",
+              border: "#27272a",
+              primary: "#d97706",
+              "primary-foreground": "#18181b",
+            },
+          },
+        },
+      };
+    </script>
+
+    <style>
+      html,
+      body {
+        background-color: #09090b;
+        color: #fafafa;
+      }
+
+      /* Dezentes Raster im Hintergrund — gibt Tiefe ohne abzulenken */
+      .bg-grid {
+        background-image:
+          radial-gradient(ellipse 80% 50% at 50% -10%, rgba(217, 119, 6, 0.14), transparent),
+          linear-gradient(to right, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+          linear-gradient(to bottom, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+        background-size: auto, 48px 48px, 48px 48px;
+      }
+
+      .msg-list::-webkit-scrollbar,
+      .user-list::-webkit-scrollbar {
+        width: 8px;
+      }
+      .msg-list::-webkit-scrollbar-thumb,
+      .user-list::-webkit-scrollbar-thumb {
+        background: #3f3f46;
+        border-radius: 999px;
+      }
+
+      :focus-visible {
+        outline: 2px solid #f59e0b;
+        outline-offset: 2px;
+      }
+    </style>
+  </head>
+  <body class="h-full min-h-dvh bg-background font-sans antialiased bg-grid">
+    <a
+      href="#main"
+      class="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-lg focus:bg-primary focus:px-4 focus:py-2 focus:text-primary-foreground"
+    >
+      Zum Inhalt springen
+    </a>
+
+    <!-- ===================================================================
+         Ansicht: Login / Registrierung
+         =================================================================== -->
+    <div id="view-auth" class="flex min-h-dvh items-center justify-center px-4 py-8 sm:px-6">
+      <main id="main" class="w-full max-w-md">
+        <header class="mb-8 text-center">
+          <p class="mb-3 text-sm font-medium uppercase tracking-[0.2em] text-amber-500/90">Raum</p>
+          <h1 class="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
+            Gemeinsamer Chat
+          </h1>
+          <p class="mt-3 text-base leading-relaxed text-muted-foreground">
+            Anmelden oder Konto anlegen — dann geht es in den globalen Raum.
+          </p>
+        </header>
+
+        <section
+          class="rounded-2xl bg-card p-5 shadow-xl shadow-black/40 ring-1 ring-border/80 sm:p-6"
+          aria-labelledby="auth-heading"
+        >
+          <h2 id="auth-heading" class="sr-only">Anmeldung</h2>
+
+          <!-- Segmented Control: Anmelden | Registrieren -->
+          <div
+            class="mb-6 flex h-14 min-h-14 rounded-full bg-muted p-1.5"
+            role="tablist"
+            aria-label="Anmeldungsart"
+          >
+            <button
+              type="button"
+              id="tab-login"
+              role="tab"
+              aria-selected="true"
+              class="h-full min-h-0 max-h-full flex-1 rounded-full px-3 text-sm font-medium leading-none text-foreground shadow-sm shadow-black/40 bg-background"
+            >
+              Anmelden
+            </button>
+            <button
+              type="button"
+              id="tab-register"
+              role="tab"
+              aria-selected="false"
+              class="h-full min-h-0 max-h-full flex-1 rounded-full px-3 text-sm font-medium leading-none text-muted-foreground"
+            >
+              Registrieren
+            </button>
+          </div>
+
+          <form id="form-auth" class="flex flex-col gap-4" novalidate>
+            <div class="flex flex-col gap-2">
+              <label for="username" class="text-sm font-medium text-foreground">Benutzername</label>
+              <input
+                id="username"
+                name="username"
+                type="text"
+                autocomplete="username"
+                autocapitalize="off"
+                spellcheck="false"
+                minlength="3"
+                maxlength="32"
+                required
+                class="h-12 w-full rounded-xl bg-zinc-900 px-4 text-base text-foreground ring-1 ring-border placeholder:text-zinc-500"
+                placeholder="z. B. anna_42"
+              />
+              <p class="text-xs leading-snug text-muted-foreground">
+                3–32 Zeichen, nur Buchstaben, Zahlen und Unterstrich.
+              </p>
+            </div>
+
+            <div class="flex flex-col gap-2">
+              <label for="password" class="text-sm font-medium text-foreground">Passwort</label>
+              <input
+                id="password"
+                name="password"
+                type="password"
+                autocomplete="current-password"
+                minlength="8"
+                maxlength="128"
+                required
+                class="h-12 w-full rounded-xl bg-zinc-900 px-4 text-base text-foreground ring-1 ring-border placeholder:text-zinc-500"
+                placeholder="Mindestens 8 Zeichen"
+              />
+            </div>
+
+            <div id="wrap-password-confirm" class="hidden flex-col gap-2">
+              <label for="password-confirm" class="text-sm font-medium text-foreground">
+                Passwort bestätigen
+              </label>
+              <input
+                id="password-confirm"
+                name="passwordConfirm"
+                type="password"
+                autocomplete="new-password"
+                minlength="8"
+                maxlength="128"
+                class="h-12 w-full rounded-xl bg-zinc-900 px-4 text-base text-foreground ring-1 ring-border placeholder:text-zinc-500"
+                placeholder="Passwort wiederholen"
+              />
+            </div>
+
+            <p
+              id="auth-error"
+              class="hidden rounded-lg bg-red-950/80 px-3 py-2 text-sm leading-snug text-red-200 ring-1 ring-red-900"
+              role="alert"
+            ></p>
+
+            <button
+              type="submit"
+              id="auth-submit"
+              class="mt-1 inline-flex h-12 min-h-11 w-full items-center justify-center rounded-xl bg-amber-500 px-4 text-base font-semibold text-zinc-950 hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Anmelden
+            </button>
+          </form>
+        </section>
+      </main>
+    </div>
+
+    <!-- ===================================================================
+         Ansicht: Chatraum (nach Login)
+         =================================================================== -->
+    <div id="view-chat" class="hidden h-dvh flex-col">
+      <header
+        class="flex min-h-14 shrink-0 items-center gap-3 border-b border-border bg-zinc-950/80 px-4 py-2 backdrop-blur-md sm:px-6"
+      >
+        <div class="min-w-0 flex-1">
+          <p class="text-xs font-medium uppercase tracking-[0.18em] text-amber-500">Raum</p>
+          <h1 class="truncate text-lg font-semibold leading-snug text-foreground">Globaler Chat</h1>
+        </div>
+
+        <p class="hidden text-sm text-muted-foreground sm:block">
+          Angemeldet als
+          <span id="label-username" class="font-medium text-foreground"></span>
+        </p>
+
+        <button
+          type="button"
+          id="btn-online"
+          class="inline-flex h-11 min-h-11 items-center gap-2 rounded-full bg-muted px-3 text-sm font-medium text-foreground lg:hidden"
+          aria-expanded="false"
+          aria-controls="online-panel"
+        >
+          <span class="inline-block h-2.5 w-2.5 rounded-full bg-emerald-400" aria-hidden="true"></span>
+          <span id="online-count-mobile">0 online</span>
+        </button>
+
+        <button
+          type="button"
+          id="btn-logout"
+          class="inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-sm font-medium text-muted-foreground ring-1 ring-border hover:bg-muted hover:text-foreground"
+        >
+          Abmelden
+        </button>
+      </header>
+
+      <div class="flex min-h-0 flex-1">
+        <section class="flex min-w-0 flex-1 flex-col" aria-label="Nachrichten">
+          <div
+            id="message-list"
+            class="msg-list flex flex-1 flex-col gap-3 overflow-y-auto px-4 py-4 sm:px-6"
+            role="log"
+            aria-live="polite"
+            aria-relevant="additions"
+          ></div>
+
+          <form
+            id="form-message"
+            class="shrink-0 border-t border-border bg-zinc-950/90 px-4 py-3 sm:px-6"
+          >
+            <p
+              id="chat-error"
+              class="mb-2 hidden rounded-lg bg-red-950/80 px-3 py-2 text-sm text-red-200"
+              role="alert"
+            ></p>
+            <div class="flex items-end gap-2">
+              <label for="message-input" class="sr-only">Nachricht</label>
+              <input
+                id="message-input"
+                name="message"
+                type="text"
+                maxlength="1000"
+                autocomplete="off"
+                placeholder="Nachricht schreiben…"
+                class="h-12 min-h-11 flex-1 rounded-xl bg-zinc-900 px-4 text-base text-foreground ring-1 ring-border placeholder:text-zinc-500"
+              />
+              <button
+                type="submit"
+                id="btn-send"
+                class="inline-flex h-12 min-h-11 shrink-0 items-center justify-center rounded-xl bg-amber-500 px-5 text-sm font-semibold text-zinc-950 hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Senden
+              </button>
+            </div>
+          </form>
+        </section>
+
+        <!-- Desktop: Online-Liste dauerhaft sichtbar -->
+        <aside
+          class="user-list hidden w-64 shrink-0 overflow-y-auto border-l border-border bg-zinc-950/60 p-4 lg:block"
+          aria-label="Online-Nutzer"
+        >
+          <h2 class="mb-3 text-sm font-semibold text-foreground">
+            Online
+            <span id="online-count-desktop" class="font-normal text-muted-foreground">(0)</span>
+          </h2>
+          <ul id="user-list-desktop" class="flex flex-col gap-1"></ul>
+        </aside>
+      </div>
+    </div>
+
+    <!-- Mobile: Online-Panel als Overlay -->
+    <div id="online-overlay" class="fixed inset-0 z-40 hidden lg:hidden" hidden>
+      <button
+        type="button"
+        id="online-backdrop"
+        class="absolute inset-0 bg-black/60"
+        aria-label="Online-Liste schließen"
+      ></button>
+      <aside
+        id="online-panel"
+        class="user-list absolute inset-y-0 right-0 flex w-[min(20rem,90vw)] flex-col bg-zinc-950 p-4 shadow-2xl ring-1 ring-border"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="online-panel-title"
+      >
+        <div class="mb-4 flex items-center justify-between gap-3">
+          <h2 id="online-panel-title" class="text-base font-semibold">Wer ist online</h2>
+          <button
+            type="button"
+            id="btn-online-close"
+            class="inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-sm font-medium ring-1 ring-border"
+          >
+            Schließen
+          </button>
+        </div>
+        <ul id="user-list-mobile" class="flex flex-1 flex-col gap-1 overflow-y-auto"></ul>
+      </aside>
+    </div>
+
+    <noscript>
+      <p class="p-6 text-center text-red-200">JavaScript wird für den Chat benötigt.</p>
+    </noscript>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/app.js" defer></script>
+  </body>
+</html>
