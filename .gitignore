@@ -1,6 +1,9 @@
 # Abhängigkeiten
 node_modules/
 
+# Hochgeladene Bilder/Sprachnachrichten (liegen im Docker-Volume)
+uploads/
+
 # Secrets — niemals committen
 .env
 

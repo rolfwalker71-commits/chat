@@ -4,9 +4,9 @@
  * =============================================================================
  *
  * XSS-Schutz im Browser:
- *   Nutzernamen und Nachrichten werden ausschließlich über `textContent`
- *   ins DOM geschrieben — niemals über innerHTML. So können Tags aus der
- *   Datenbank nicht als HTML/JavaScript ausgeführt werden.
+ *   Nutzernamen, Klartext und Koordinaten werden ausschließlich über
+ *   `textContent` ins DOM geschrieben — niemals über innerHTML.
+ *   Bilder/Audio kommen nur von /api/files/<uuid> oder geprüften http(s)-URLs.
  *
  * Auth:
  *   Session-Cookie ist httpOnly (vom Server gesetzt). fetch() und Socket.io
@@ -19,10 +19,10 @@
 
   const MAX_MESSAGE_LENGTH = 1000;
   const USERNAME_PATTERN = /^[a-zA-Z0-9_]{3,32}$/;
+  const MAX_VOICE_MS = 60_000;
+  const FILE_UUID = /^[0-9a-f-]{36}$/i;
+  const ALLOWED_REACTIONS = ["👍", "❤️", "😂", "🎉", "😮", "😢"];
 
-  // ---------------------------------------------------------------------------
-  // DOM-Referenzen
-  // ---------------------------------------------------------------------------
   const viewAuth = document.getElementById("view-auth");
   const viewChat = document.getElementById("view-chat");
   const formAuth = document.getElementById("form-auth");
@@ -35,6 +35,9 @@
   const authError = document.getElementById("auth-error");
   const authSubmit = document.getElementById("auth-submit");
   const labelUsername = document.getElementById("label-username");
+  const headerAvatar = document.getElementById("header-avatar");
+  const roomKicker = document.getElementById("room-kicker");
+  const roomTitle = document.getElementById("room-title");
   const formMessage = document.getElementById("form-message");
   const messageInput = document.getElementById("message-input");
   const messageList = document.getElementById("message-list");
@@ -49,15 +52,124 @@
   const userListMobile = document.getElementById("user-list-mobile");
   const onlineCountDesktop = document.getElementById("online-count-desktop");
   const onlineCountMobile = document.getElementById("online-count-mobile");
+  const btnNav = document.getElementById("btn-nav");
+  const btnNavClose = document.getElementById("btn-nav-close");
+  const navOverlay = document.getElementById("nav-overlay");
+  const navBackdrop = document.getElementById("nav-backdrop");
+  const btnGlobalDesktop = document.getElementById("btn-global-desktop");
+  const btnGlobalMobile = document.getElementById("btn-global-mobile");
+  const convListDesktop = document.getElementById("conv-list-desktop");
+  const convListMobile = document.getElementById("conv-list-mobile");
+  const userSearchDesktop = document.getElementById("user-search-desktop");
+  const userSearchMobile = document.getElementById("user-search-mobile");
+  const searchResultsDesktop = document.getElementById("user-search-results-desktop");
+  const searchResultsMobile = document.getElementById("user-search-results-mobile");
+  const searchPickedDesktop = document.getElementById("search-picked-desktop");
+  const searchPickedMobile = document.getElementById("search-picked-mobile");
+  const formSearchDesktop = document.getElementById("form-user-search-desktop");
+  const formSearchMobile = document.getElementById("form-user-search-mobile");
+  const btnStartChatDesktop = document.getElementById("btn-start-chat-desktop");
+  const btnStartChatMobile = document.getElementById("btn-start-chat-mobile");
+  const btnProfile = document.getElementById("btn-profile");
+  const btnProfileClose = document.getElementById("btn-profile-close");
+  const profileOverlay = document.getElementById("profile-overlay");
+  const profileBackdrop = document.getElementById("profile-backdrop");
+  const formProfile = document.getElementById("form-profile");
+  const profileRealname = document.getElementById("profile-realname");
+  const profileAvatarUrl = document.getElementById("profile-avatar-url");
+  const profileAvatarFile = document.getElementById("profile-avatar-file");
+  const profileAvatarPreview = document.getElementById("profile-avatar-preview");
+  const profileError = document.getElementById("profile-error");
+  const profileOk = document.getElementById("profile-ok");
+  const profileSubmit = document.getElementById("profile-submit");
+  const btnAttachImage = document.getElementById("btn-attach-image");
+  const btnAttachLocation = document.getElementById("btn-attach-location");
+  const btnAttachVoice = document.getElementById("btn-attach-voice");
+  const inputImage = document.getElementById("input-image");
+  const recordBar = document.getElementById("record-bar");
+  const recordTimer = document.getElementById("record-timer");
+  const btnRecordCancel = document.getElementById("btn-record-cancel");
+  const btnRecordSend = document.getElementById("btn-record-send");
+  const typingIndicator = document.getElementById("typing-indicator");
+  const replyBar = document.getElementById("reply-bar");
+  const replyAuthor = document.getElementById("reply-author");
+  const replyPreview = document.getElementById("reply-preview");
+  const btnReplyCancel = document.getElementById("btn-reply-cancel");
+  const aiSuggestions = document.getElementById("ai-suggestions");
+  const btnSearch = document.getElementById("btn-search");
+  const btnSearchClose = document.getElementById("btn-search-close");
+  const searchOverlay = document.getElementById("search-overlay");
+  const searchBackdrop = document.getElementById("search-backdrop");
+  const formSearch = document.getElementById("form-search");
+  const searchQuery = document.getElementById("search-query");
+  const searchCurrentOnly = document.getElementById("search-current-only");
+  const searchError = document.getElementById("search-error");
+  const searchResults = document.getElementById("search-results");
+  const btnChatMenu = document.getElementById("btn-chat-menu");
+  const btnChatMenuClose = document.getElementById("btn-chat-menu-close");
+  const chatMenuOverlay = document.getElementById("chat-menu-overlay");
+  const chatMenuBackdrop = document.getElementById("chat-menu-backdrop");
+  const btnMarkUnread = document.getElementById("btn-mark-unread");
+  const aiHint = document.getElementById("ai-hint");
+  const globalUnreadDesktop = document.getElementById("global-unread-desktop");
+  const globalUnreadMobile = document.getElementById("global-unread-mobile");
+  const roomStatus = document.getElementById("room-status");
+  const btnAttachFile = document.getElementById("btn-attach-file");
+  const inputFile = document.getElementById("input-file");
+  const btnSummarize = document.getElementById("btn-summarize");
+  const btnNotify = document.getElementById("btn-notify");
+  const groupTools = document.getElementById("group-tools");
+  const groupTitle = document.getElementById("group-title");
+  const btnGroupTitle = document.getElementById("btn-group-title");
+  const groupAddUser = document.getElementById("group-add-user");
+  const btnGroupAdd = document.getElementById("btn-group-add");
+  const btnGroupLeave = document.getElementById("btn-group-leave");
+  const summaryBox = document.getElementById("summary-box");
+  const btnAssistantDesktop = document.getElementById("btn-assistant-desktop");
+  const btnAssistantMobile = document.getElementById("btn-assistant-mobile");
+  const forwardOverlay = document.getElementById("forward-overlay");
+  const forwardBackdrop = document.getElementById("forward-backdrop");
+  const btnForwardClose = document.getElementById("btn-forward-close");
+  const forwardTargets = document.getElementById("forward-targets");
 
   /** @type {"login" | "register"} */
   let authMode = "login";
-  /** @type {{ id: number, username: string } | null} */
+  /** @type {{ id: number, username: string, realName?: string, avatarUrl?: string } | null} */
   let currentUser = null;
   /** @type {import("socket.io-client").Socket | null} */
   let socket = null;
-  /** Verhindert doppeltes Rendern derselben Nachricht (Reconnect). */
+  /** null = globaler Raum */
+  let activeConversationId = null;
+  /** @type {Array} */
+  let conversations = [];
+  /** @type {Map<string, {id:number, username:string, realName?:string}>} */
+  const pickedUsers = new Map();
   const seenMessageIds = new Set();
+  const messagesById = new Map();
+  let searchTimer = 0;
+  let msgSearchTimer = 0;
+  let typingTimer = 0;
+  let typingSent = false;
+  /** @type {{ id: number, username?: string, realName?: string, content?: string, type?: string } | null} */
+  let replyTarget = null;
+  let globalUnread = 0;
+  /** @type {{ enabled?: boolean } | null} */
+  let aiStatus = null;
+  /** @type {HTMLElement | null} */
+  let reactionPicker = null;
+  let editingId = null;
+  let forwardMessageId = null;
+  let voiceTranscript = "";
+  const onlineIds = new Set();
+  let notifyPermission = typeof Notification !== "undefined" ? Notification.permission : "denied";
+
+  let mediaRecorder = null;
+  let recordChunks = [];
+  let recordStream = null;
+  let recordStartedAt = 0;
+  let recordInterval = null;
+  let recordStopTimer = null;
+  let recordMime = "";
 
   const timeFormatter = new Intl.DateTimeFormat("de-DE", {
     day: "2-digit",
@@ -66,9 +178,11 @@
     minute: "2-digit",
   });
 
-  // ---------------------------------------------------------------------------
-  // DOM-Helfer — nie innerHTML mit Serverdaten
-  // ---------------------------------------------------------------------------
+  const coordFormatter = new Intl.NumberFormat("de-DE", {
+    minimumFractionDigits: 4,
+    maximumFractionDigits: 5,
+  });
+
   function el(tag, className, text) {
     const node = document.createElement(tag);
     if (className) node.className = className;
@@ -84,6 +198,57 @@
     }
     node.textContent = message;
     node.classList.remove("hidden");
+  }
+
+  function displayName(user) {
+    const real = (user?.realName || "").trim();
+    return real || user?.username || "";
+  }
+
+  function getInitials(user) {
+    const name = displayName(user);
+    const parts = name.split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) {
+      return (parts[0][0] + parts[1][0]).toUpperCase();
+    }
+    return name.slice(0, 2).toUpperCase() || "?";
+  }
+
+  function safeAvatarSrc(url) {
+    if (!url || typeof url !== "string") return null;
+    if (/^\/api\/files\/[0-9a-f-]{36}$/i.test(url)) return url;
+    try {
+      const parsed = new URL(url, window.location.origin);
+      if (parsed.protocol === "https:" || parsed.protocol === "http:") return parsed.href;
+    } catch {
+      return null;
+    }
+    return null;
+  }
+
+  function fillAvatar(container, user, sizeClass) {
+    container.replaceChildren();
+    container.className = `${sizeClass} shrink-0 overflow-hidden rounded-full bg-zinc-800 ring-1 ring-border`;
+    const src = safeAvatarSrc(user?.avatarUrl);
+    const initials = el(
+      "span",
+      "flex h-full w-full items-center justify-center text-[0.65rem] font-semibold text-amber-400",
+      getInitials(user)
+    );
+    if (!src) {
+      container.append(initials);
+      return;
+    }
+    const img = document.createElement("img");
+    img.alt = "";
+    img.className = "h-full w-full object-cover";
+    img.referrerPolicy = "no-referrer";
+    img.src = src;
+    img.addEventListener("error", () => {
+      img.remove();
+      container.append(initials);
+    });
+    container.append(img);
   }
 
   function setAuthMode(mode) {
@@ -123,18 +288,32 @@
     viewAuth.classList.add("hidden");
     viewChat.classList.remove("hidden");
     viewChat.classList.add("flex");
-    labelUsername.textContent = currentUser.username;
+    refreshSelfUi();
     messageInput.focus();
   }
 
-  // ---------------------------------------------------------------------------
-  // REST-Aufrufe (Cookie wird automatisch mitgeschickt)
-  // ---------------------------------------------------------------------------
+  function refreshSelfUi() {
+    if (!currentUser) return;
+    labelUsername.textContent = displayName(currentUser);
+    fillAvatar(headerAvatar, currentUser, "inline-flex h-8 w-8");
+    fillAvatar(profileAvatarPreview, currentUser, "h-16 w-16");
+  }
+
+  function sameRoom(conversationId) {
+    if (conversationId == null && activeConversationId == null) return true;
+    return Number(conversationId) === Number(activeConversationId);
+  }
+
   async function api(path, options = {}) {
+    const headers = { ...(options.headers || {}) };
+    if (!(options.body instanceof FormData) && !headers["Content-Type"]) {
+      headers["Content-Type"] = "application/json";
+    }
+
     const response = await fetch(path, {
       credentials: "same-origin",
-      headers: { "Content-Type": "application/json", ...(options.headers || {}) },
       ...options,
+      headers,
     });
 
     let data = {};
@@ -153,7 +332,10 @@
   async function restoreSession() {
     try {
       currentUser = await api("/api/me");
+      aiStatus = currentUser.ai || null;
+      setGlobalUnread(currentUser.globalUnread || 0);
       showChat();
+      await loadConversations();
       connectSocket();
     } catch {
       currentUser = null;
@@ -193,8 +375,13 @@
         method: "POST",
         body: JSON.stringify({ username, password }),
       });
+      const me = await api("/api/me");
+      currentUser = { ...currentUser, ...me };
+      aiStatus = me.ai || null;
+      setGlobalUnread(me.globalUnread || 0);
       formAuth.reset();
       showChat();
+      await loadConversations();
       connectSocket();
     } catch (err) {
       showError(authError, err.message);
@@ -205,6 +392,7 @@
   }
 
   async function handleLogout() {
+    stopRecording(false);
     try {
       await api("/api/logout", { method: "POST" });
     } catch {
@@ -212,14 +400,26 @@
     }
     teardownSocket();
     currentUser = null;
+    conversations = [];
+    pickedUsers.clear();
     seenMessageIds.clear();
+    messagesById.clear();
+    activeConversationId = null;
+    replyTarget = null;
+    globalUnread = 0;
+    aiStatus = null;
+    hideReactionPicker();
+    setReplyTarget(null);
     messageList.replaceChildren();
+    setNavPanel(false);
+    setOnlinePanel(false);
+    setProfilePanel(false);
+    setSearchPanel(false);
+    setChatMenu(false);
+    setForwardPanel(false);
     showAuth();
   }
 
-  // ---------------------------------------------------------------------------
-  // Nachrichten-UI
-  // ---------------------------------------------------------------------------
   function formatTime(iso) {
     try {
       return timeFormatter.format(new Date(iso));
@@ -228,39 +428,512 @@
     }
   }
 
-  function appendMessage(message, { scroll = true } = {}) {
-    if (message.id != null) {
-      if (seenMessageIds.has(message.id)) return;
-      seenMessageIds.add(message.id);
-    }
+  function formatDuration(ms) {
+    const total = Math.max(0, Math.round(ms / 1000));
+    const m = Math.floor(total / 60);
+    const s = total % 60;
+    return `${m}:${String(s).padStart(2, "0")}`;
+  }
 
-    const mine = currentUser && message.username === currentUser.username;
-    const row = el("article", `flex ${mine ? "justify-end" : "justify-start"}`);
+  function osmUrl(lat, lng) {
+    return `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lng}#map=16/${lat}/${lng}`;
+  }
+
+  function previewText(message) {
+    if (!message) return "";
+    if (message.deleted) return "Nachricht gelöscht";
+    const type = message.type || "text";
+    if (type === "image") return "Bild";
+    if (type === "voice") return "Sprachnachricht";
+    if (type === "location") return "Standort";
+    if (type === "file") return message.file?.name || "Datei";
+    if (type === "deleted") return "Nachricht gelöscht";
+    return message.content || "";
+  }
+
+  function activeConversation() {
+    return conversations.find((c) => c.id === activeConversationId) || null;
+  }
+
+  function receiptLabel(message) {
+    if (!currentUser || message.userId !== currentUser.id) return "";
+    const conv = activeConversation();
+    if (!conv || conv.type !== "dm") return "";
+    const last = Number(conv.peerLastReadMessageId) || 0;
+    return last >= Number(message.id) ? "Gesehen" : "Gesendet";
+  }
+
+  function refreshReceipts() {
+    for (const row of messageList.querySelectorAll("article[data-message-id]")) {
+      const id = Number(row.getAttribute("data-message-id"));
+      const message = messagesById.get(id);
+      const node = row.querySelector("[data-receipt]");
+      if (!message || !node) continue;
+      node.textContent = receiptLabel(message);
+    }
+  }
+
+  function lastSeenLabel(user) {
+    if (!user) return "";
+    if (user.isBot) return "Assistent";
+    if (onlineIds.has(user.id)) return "online";
+    if (!user.lastSeenAt) return "zuletzt unbekannt";
+    return `zuletzt ${formatTime(user.lastSeenAt)}`;
+  }
+
+  function roomStatusText(conv) {
+    if (!conv) return "";
+    if (conv.type === "dm" && conv.peer) return lastSeenLabel(conv.peer);
+    if (conv.type === "group") {
+      const n = (conv.members || []).length;
+      return `${n} Mitglieder`;
+    }
+    return "";
+  }
+
+  function startEdit(message) {
+    if (!message?.id) return;
+    editingId = message.id;
+    messageInput.value = message.content || "";
+    btnSend.textContent = "Speichern";
+    messageInput.focus();
+  }
+
+  function clearEdit() {
+    editingId = null;
+    btnSend.textContent = "Senden";
+  }
+
+  function setForwardPanel(open) {
+    setOverlay(forwardOverlay, open);
+    if (!open) forwardMessageId = null;
+  }
+
+  function openForward(messageId) {
+    forwardMessageId = messageId;
+    forwardTargets.replaceChildren();
+    const globalItem = el("li", "");
+    const globalBtn = el(
+      "button",
+      "flex min-h-11 w-full items-center rounded-xl px-3 text-left text-sm hover:bg-muted",
+      "Globaler Chat"
+    );
+    globalBtn.type = "button";
+    globalBtn.addEventListener("click", () => forwardTo(null));
+    globalItem.append(globalBtn);
+    forwardTargets.append(globalItem);
+    for (const conv of conversations) {
+      const item = el("li", "");
+      const btn = el(
+        "button",
+        "flex min-h-11 w-full items-center rounded-xl px-3 text-left text-sm hover:bg-muted whitespace-normal",
+        conversationLabel(conv)
+      );
+      btn.type = "button";
+      btn.addEventListener("click", () => forwardTo(conv.id));
+      item.append(btn);
+      forwardTargets.append(item);
+    }
+    setForwardPanel(true);
+  }
+
+  function forwardTo(conversationId) {
+    if (!socket || !forwardMessageId) return;
+    socket.emit("message:forward", { messageId: forwardMessageId, conversationId }, (ack) => {
+      setForwardPanel(false);
+      if (!ack?.ok) showError(chatError, ack?.error || "Weiterleiten fehlgeschlagen.");
+      else if (conversationId != null) openConversation(conversationId);
+    });
+  }
+
+  async function loadSmartReplies() {
+    if (!aiSuggestions) return;
+    try {
+      const body = { conversationId: activeConversationId };
+      const data = await api("/api/ai/suggest-replies", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      const suggestions = data.suggestions || [];
+      aiSuggestions.replaceChildren();
+      if (!suggestions.length) {
+        aiSuggestions.classList.add("hidden");
+        aiSuggestions.hidden = true;
+        return;
+      }
+      for (const text of suggestions) {
+        const btn = el(
+          "button",
+          "inline-flex h-11 min-h-11 items-center rounded-full bg-muted px-3 text-sm text-foreground",
+          text
+        );
+        btn.type = "button";
+        btn.addEventListener("click", async () => {
+          messageInput.value = text;
+          await handleSend(new Event("submit"));
+        });
+        aiSuggestions.append(btn);
+      }
+      aiSuggestions.classList.remove("hidden");
+      aiSuggestions.classList.add("flex");
+      aiSuggestions.hidden = false;
+    } catch {
+      aiSuggestions.classList.add("hidden");
+      aiSuggestions.hidden = true;
+    }
+  }
+
+  function notifyIncoming(message) {
+    if (notifyPermission !== "granted") return;
+    if (!message || (currentUser && message.userId === currentUser.id)) return;
+    if (!document.hidden && sameRoom(message.conversationId ?? null)) return;
+    try {
+      const n = new Notification(displayName(message) || "Neue Nachricht", {
+        body: previewText(message).slice(0, 80),
+        tag: `chat-${message.conversationId || "global"}`,
+      });
+      n.addEventListener("click", () => {
+        window.focus();
+        openConversation(message.conversationId ?? null);
+      });
+    } catch {
+      // Browser kann Notifications stillschweigend ablehnen.
+    }
+  }
+
+  async function openAssistant() {
+    try {
+      const conv = await api("/api/conversations", {
+        method: "POST",
+        body: JSON.stringify({ usernames: ["raum"] }),
+      });
+      upsertConversation(conv);
+      await openConversation(conv.id);
+      setNavPanel(false);
+    } catch (err) {
+      showError(chatError, err.message);
+    }
+  }
+
+  function setReplyTarget(message) {
+    if (!message?.id || message.deleted) {
+      replyTarget = null;
+      replyBar.classList.add("hidden");
+      replyBar.classList.remove("flex");
+      replyAuthor.textContent = "";
+      replyPreview.textContent = "";
+      return;
+    }
+    replyTarget = message;
+    replyAuthor.textContent = displayName(message);
+    replyPreview.textContent = previewText(message);
+    replyBar.classList.remove("hidden");
+    replyBar.classList.add("flex");
+    messageInput.focus();
+  }
+
+  function hideReactionPicker() {
+    if (reactionPicker) {
+      reactionPicker.remove();
+      reactionPicker = null;
+    }
+  }
+
+  function toggleReaction(messageId, emoji) {
+    if (!socket || !messageId) return;
+    socket.emit("reaction:toggle", { messageId, emoji }, (ack) => {
+      if (!ack?.ok) showError(chatError, ack?.error || "Reaktion fehlgeschlagen.");
+    });
+  }
+
+  function showReactionPicker(anchor, message) {
+    hideReactionPicker();
+    const picker = el(
+      "div",
+      "absolute z-20 mt-1 flex flex-wrap gap-1 rounded-2xl bg-zinc-950 p-1 shadow-xl ring-1 ring-border"
+    );
+    picker.setAttribute("role", "menu");
+    picker.setAttribute("aria-label", "Reaktion wählen");
+    for (const emoji of ALLOWED_REACTIONS) {
+      const btn = el(
+        "button",
+        "inline-flex h-11 min-h-11 w-11 items-center justify-center rounded-xl text-lg hover:bg-muted",
+        emoji
+      );
+      btn.type = "button";
+      btn.setAttribute("aria-label", `Reaktion ${emoji}`);
+      btn.addEventListener("click", (event) => {
+        event.stopPropagation();
+        toggleReaction(message.id, emoji);
+        hideReactionPicker();
+      });
+      picker.append(btn);
+    }
+    const wrap = anchor.closest("article") || anchor.parentElement;
+    wrap.style.position = "relative";
+    wrap.append(picker);
+    reactionPicker = picker;
+  }
+
+  function applyReactions(row, message) {
+    let host = row.querySelector("[data-reactions]");
+    if (!host) {
+      host = el("div", "mt-2 flex flex-wrap gap-1");
+      host.setAttribute("data-reactions", "");
+      const bubble = row.querySelector("[data-bubble]");
+      if (bubble) bubble.append(host);
+    }
+    host.replaceChildren();
+    for (const reaction of message.reactions || []) {
+      const btn = el(
+        "button",
+        `inline-flex h-11 min-h-11 items-center gap-1 rounded-full px-3 text-sm ${
+          reaction.mine ? "bg-amber-500/20 ring-1 ring-amber-500/40" : "bg-zinc-800 ring-1 ring-border"
+        }`
+      );
+      btn.type = "button";
+      btn.append(el("span", "", reaction.emoji), el("span", "text-xs text-muted-foreground", String(reaction.count)));
+      btn.setAttribute("aria-pressed", String(Boolean(reaction.mine)));
+      btn.addEventListener("click", () => toggleReaction(message.id, reaction.emoji));
+      host.append(btn);
+    }
+  }
+
+  function replaceMessageRow(message) {
+    const row = messageList.querySelector(`[data-message-id="${message.id}"]`);
+    if (!row) return;
+    const next = document.createDocumentFragment();
+    const rebuilt = buildMessageRow(message);
+    next.append(rebuilt);
+    row.replaceWith(rebuilt);
+  }
+
+  function buildMessageRow(message) {
+    const mine = currentUser && message.userId === currentUser.id;
+    const row = el("article", `relative flex gap-2 ${mine ? "justify-end" : "justify-start"}`);
     row.setAttribute("data-message-id", String(message.id ?? ""));
+
+    const avatar = el("div", "");
+    fillAvatar(avatar, message, "h-9 w-9 mt-1");
+    if (mine) avatar.classList.add("order-2");
+
+    const col = el("div", `max-w-[min(36rem,85%)] ${mine ? "items-end" : "items-start"} flex flex-col`);
 
     const bubble = el(
       "div",
-      `max-w-[min(36rem,85%)] rounded-2xl px-4 py-3 leading-snug ${
-        mine
-          ? "bg-amber-500/15 text-foreground ring-1 ring-amber-500/20"
-          : "bg-zinc-900 text-foreground ring-1 ring-border"
+      `w-full rounded-2xl px-4 py-3 leading-snug ${
+        message.deleted
+          ? "bg-zinc-900/70 text-muted-foreground ring-1 ring-border"
+          : mine
+            ? "bg-amber-500/15 text-foreground ring-1 ring-amber-500/20"
+            : "bg-zinc-900 text-foreground ring-1 ring-border"
       }`
     );
+    bubble.setAttribute("data-bubble", "");
 
     const meta = el("div", "mb-1 flex flex-wrap items-baseline gap-x-2 gap-y-0.5");
+    const name = displayName(message);
     meta.append(
       el(
         "span",
-        `text-sm font-semibold ${mine ? "text-amber-400" : "text-zinc-200"}`,
-        message.username
-      ),
-      el("time", "text-xs text-muted-foreground", formatTime(message.createdAt))
+        `text-sm font-semibold break-words ${mine ? "text-amber-400" : "text-zinc-200"}`,
+        name
+      )
     );
+    if (message.realName && message.username) {
+      meta.append(el("span", "text-xs text-muted-foreground", `@${message.username}`));
+    }
+    meta.append(el("time", "text-xs text-muted-foreground", formatTime(message.createdAt)));
+    bubble.append(meta);
 
-    const body = el("p", "break-words whitespace-pre-wrap text-sm sm:text-base", message.content);
+    if (message.replyTo) {
+      const quote = el(
+        "button",
+        "mb-2 w-full rounded-xl bg-zinc-950/60 px-3 py-2 text-left ring-1 ring-border hover:bg-zinc-950"
+      );
+      quote.type = "button";
+      quote.append(
+        el(
+          "p",
+          "text-xs font-medium text-amber-400",
+          message.replyTo.deleted ? "Gelöschte Nachricht" : displayName(message.replyTo)
+        ),
+        el(
+          "p",
+          "mt-0.5 line-clamp-2 break-words text-xs text-muted-foreground",
+          previewText(message.replyTo)
+        )
+      );
+      quote.addEventListener("click", () => scrollToMessage(message.replyTo.id));
+      bubble.append(quote);
+    }
 
-    bubble.append(meta, body);
-    row.append(bubble);
+    if (message.deleted) {
+      bubble.append(el("p", "text-sm italic", "Nachricht gelöscht"));
+    } else {
+      const type = message.type || "text";
+      if (type === "image" && message.file?.id && FILE_UUID.test(message.file.id)) {
+        const link = document.createElement("a");
+        link.href = `/api/files/${message.file.id}`;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.className = "mt-1 block";
+        const img = document.createElement("img");
+        img.alt = message.content || "Gesendetes Bild";
+        img.className = "max-h-72 max-w-full rounded-xl object-contain";
+        img.src = `/api/files/${message.file.id}`;
+        link.append(img);
+        bubble.append(link);
+        if (message.content && message.content !== "Bild") {
+          bubble.append(el("p", "mt-2 break-words text-sm", message.content));
+        }
+      } else if (type === "voice" && message.file?.id && FILE_UUID.test(message.file.id)) {
+        const audio = document.createElement("audio");
+        audio.controls = true;
+        audio.preload = "metadata";
+        audio.className = "mt-1 w-full max-w-xs";
+        audio.src = `/api/files/${message.file.id}`;
+        bubble.append(audio);
+        if (message.file.durationMs) {
+          bubble.append(
+            el("p", "mt-1 text-xs text-muted-foreground", formatDuration(message.file.durationMs))
+          );
+        }
+        if (message.transcript) {
+          bubble.append(el("p", "mt-2 break-words text-sm text-muted-foreground", message.transcript));
+        }
+      } else if (type === "file" && message.file?.id && FILE_UUID.test(message.file.id)) {
+        const link = document.createElement("a");
+        link.href = `/api/files/${message.file.id}`;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.className =
+          "mt-2 inline-flex h-11 min-h-11 items-center rounded-xl bg-amber-500 px-3 text-sm font-semibold text-zinc-950 hover:bg-amber-400";
+        link.textContent = message.file.name || "Datei öffnen";
+        bubble.append(link);
+        if (message.content && message.content !== "Datei") {
+          bubble.append(el("p", "mt-2 break-words text-sm", message.content));
+        }
+      } else if (type === "location" && message.location) {
+        const lat = Number(message.location.lat);
+        const lng = Number(message.location.lng);
+        if (Number.isFinite(lat) && Number.isFinite(lng)) {
+          const card = el("div", "mt-1 rounded-xl bg-zinc-950/60 p-3 ring-1 ring-border");
+          card.append(el("p", "text-sm font-medium", "Standort"));
+          card.append(
+            el(
+              "p",
+              "mt-1 font-mono text-sm text-muted-foreground",
+              `${coordFormatter.format(lat)}, ${coordFormatter.format(lng)}`
+            )
+          );
+          if (message.location.accuracy != null) {
+            card.append(
+              el(
+                "p",
+                "mt-1 text-xs text-muted-foreground",
+                `Genauigkeit ca. ${Math.round(message.location.accuracy)} m`
+              )
+            );
+          }
+          const link = document.createElement("a");
+          link.href = osmUrl(lat, lng);
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+          link.className =
+            "mt-3 inline-flex h-11 min-h-11 items-center rounded-xl bg-amber-500 px-3 text-sm font-semibold text-zinc-950 hover:bg-amber-400";
+          link.textContent = "In OpenStreetMap öffnen";
+          card.append(link);
+          bubble.append(card);
+        }
+      } else {
+        bubble.append(
+          el("p", "break-words whitespace-pre-wrap text-sm sm:text-base", message.content || "")
+        );
+      }
+      if (message.editedAt) {
+        bubble.append(el("p", "mt-1 text-xs text-muted-foreground", "bearbeitet"));
+      }
+    }
+
+    col.append(bubble);
+
+    if (!message.deleted) {
+      const actions = el("div", "mt-1 flex flex-wrap gap-1");
+      const replyBtn = el(
+        "button",
+        "inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-xs font-medium text-muted-foreground ring-1 ring-border hover:bg-muted hover:text-foreground",
+        "Antworten"
+      );
+      replyBtn.type = "button";
+      replyBtn.addEventListener("click", () => setReplyTarget(message));
+      const reactBtn = el(
+        "button",
+        "inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-xs font-medium text-muted-foreground ring-1 ring-border hover:bg-muted hover:text-foreground",
+        "Reagieren"
+      );
+      reactBtn.type = "button";
+      reactBtn.addEventListener("click", (event) => {
+        event.stopPropagation();
+        if (reactionPicker && reactionPicker.parentElement === row) hideReactionPicker();
+        else showReactionPicker(reactBtn, message);
+      });
+      actions.append(replyBtn, reactBtn);
+      if (mine && (message.type || "text") === "text") {
+        const editBtn = el(
+          "button",
+          "inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-xs font-medium text-muted-foreground ring-1 ring-border hover:bg-muted hover:text-foreground",
+          "Bearbeiten"
+        );
+        editBtn.type = "button";
+        editBtn.addEventListener("click", () => startEdit(message));
+        actions.append(editBtn);
+      }
+      const fwdBtn = el(
+        "button",
+        "inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-xs font-medium text-muted-foreground ring-1 ring-border hover:bg-muted hover:text-foreground",
+        "Weiterleiten"
+      );
+      fwdBtn.type = "button";
+      fwdBtn.addEventListener("click", () => openForward(message.id));
+      actions.append(fwdBtn);
+      if (mine) {
+        const delBtn = el(
+          "button",
+          "inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-xs font-medium text-red-200 ring-1 ring-red-900 hover:bg-red-950/60",
+          "Löschen"
+        );
+        delBtn.type = "button";
+        delBtn.addEventListener("click", () => deleteMessage(message.id));
+        actions.append(delBtn);
+      }
+      col.append(actions);
+      const receipt = el("p", "mt-1 text-xs text-muted-foreground", "");
+      receipt.setAttribute("data-receipt", "");
+      receipt.textContent = receiptLabel(message);
+      if (receipt.textContent) col.append(receipt);
+    }
+
+    if (mine) row.append(col, avatar);
+    else row.append(avatar, col);
+
+    applyReactions(row, message);
+    return row;
+  }
+
+  function appendMessage(message, { scroll = true } = {}) {
+    if (!sameRoom(message.conversationId ?? null)) return;
+    if (message.id != null) {
+      if (seenMessageIds.has(message.id)) {
+        messagesById.set(message.id, message);
+        replaceMessageRow(message);
+        return;
+      }
+      seenMessageIds.add(message.id);
+    }
+
+    messagesById.set(message.id, message);
+    const row = buildMessageRow(message);
     messageList.append(row);
 
     if (scroll) {
@@ -268,15 +941,115 @@
     }
   }
 
+  function deleteMessage(messageId) {
+    if (!socket || !messageId) return;
+    if (!window.confirm("Diese Nachricht für alle löschen?")) return;
+    socket.emit("message:delete", { messageId }, (ack) => {
+      if (!ack?.ok) showError(chatError, ack?.error || "Löschen fehlgeschlagen.");
+    });
+  }
+
+  function scrollToMessage(messageId) {
+    const row = messageList.querySelector(`[data-message-id="${messageId}"]`);
+    if (!row) return;
+    row.classList.add("msg-highlight");
+    row.scrollIntoView({ behavior: "smooth", block: "center" });
+    window.setTimeout(() => row.classList.remove("msg-highlight"), 1600);
+  }
+
+  function renderTyping(typers) {
+    const others = (Array.isArray(typers) ? typers : []).filter(
+      (user) => !currentUser || user.id !== currentUser.id
+    );
+    if (!others.length) {
+      typingIndicator.classList.add("hidden");
+      typingIndicator.replaceChildren();
+      return;
+    }
+    const names = others.map(displayName);
+    let text = "";
+    if (names.length === 1) text = `${names[0]} tippt`;
+    else if (names.length === 2) text = `${names[0]} und ${names[1]} tippen`;
+    else text = "Mehrere Personen tippen";
+
+    typingIndicator.replaceChildren();
+    const dots = el("span", "mr-2 inline-flex gap-0.5 align-middle", "");
+    dots.setAttribute("aria-hidden", "true");
+    dots.append(
+      el("span", "typing-dot inline-block h-1.5 w-1.5 rounded-full bg-amber-400"),
+      el("span", "typing-dot inline-block h-1.5 w-1.5 rounded-full bg-amber-400"),
+      el("span", "typing-dot inline-block h-1.5 w-1.5 rounded-full bg-amber-400")
+    );
+    typingIndicator.append(dots, el("span", "", `${text}…`));
+    typingIndicator.classList.remove("hidden");
+  }
+
+  function emitTyping(on) {
+    if (!socket) return;
+    const payload = { conversationId: activeConversationId };
+    socket.emit(on ? "typing:start" : "typing:stop", payload);
+    typingSent = on;
+  }
+
+  function scheduleTyping() {
+    if (!typingSent) emitTyping(true);
+    window.clearTimeout(typingTimer);
+    typingTimer = window.setTimeout(() => emitTyping(false), 1800);
+  }
+
+  function unreadBadge(count) {
+    if (!count) return null;
+    const n = count > 99 ? "99+" : String(count);
+    return el(
+      "span",
+      "ml-auto shrink-0 min-w-6 rounded-full bg-amber-500 px-2 py-0.5 text-center text-xs font-semibold text-zinc-950",
+      n
+    );
+  }
+
+  function setGlobalUnread(count) {
+    globalUnread = Number(count) || 0;
+    const label = globalUnread > 99 ? "99+" : String(globalUnread);
+    for (const node of [globalUnreadDesktop, globalUnreadMobile]) {
+      if (!node) continue;
+      if (globalUnread > 0) {
+        node.textContent = label;
+        node.classList.remove("hidden");
+      } else {
+        node.textContent = "";
+        node.classList.add("hidden");
+      }
+    }
+  }
+
+  function applyUnread({ conversationId, unreadCount }) {
+    if (conversationId == null) {
+      setGlobalUnread(unreadCount);
+      return;
+    }
+    const conv = conversations.find((c) => c.id === conversationId);
+    if (!conv) {
+      loadConversations();
+      return;
+    }
+    conv.unreadCount = Number(unreadCount) || 0;
+    renderConversationLists();
+  }
+
   function renderHistory(messages) {
     messageList.replaceChildren();
     seenMessageIds.clear();
+    messagesById.clear();
+    hideReactionPicker();
+    renderTyping([]);
 
     if (!messages.length) {
       const empty = el(
         "p",
         "mx-auto mt-12 max-w-sm text-center text-sm leading-relaxed text-muted-foreground",
-        "Noch keine Nachrichten. Schreib die erste!"
+        activeConversationId
+          ? "Noch keine Nachrichten in diesem Chat."
+          : "Noch keine Nachrichten. Schreib die erste!"
       );
       messageList.append(empty);
       return;
@@ -286,26 +1059,208 @@
       appendMessage(message, { scroll: false });
     }
     messageList.scrollTop = messageList.scrollHeight;
+    loadSmartReplies();
+  }
+
+  function conversationLabel(conv) {
+    if (!conv) return "Chat";
+    if (conv.type === "dm" && conv.peer) return displayName(conv.peer);
+    const names = (conv.members || [])
+      .filter((m) => !currentUser || m.id !== currentUser.id)
+      .map(displayName);
+    return names.length ? names.join(", ") : "Gruppe";
+  }
+
+  function updateRoomHeader() {
+    if (activeConversationId == null) {
+      roomKicker.textContent = "Raum";
+      roomTitle.textContent = "Globaler Chat";
+      roomStatus.textContent = "Für alle Angemeldeten";
+      highlightGlobal(true);
+      return;
+    }
+    const conv = conversations.find((c) => c.id === activeConversationId);
+    roomKicker.textContent = conv?.type === "group" ? "Gruppe" : "Privat";
+    roomTitle.textContent = conversationLabel(conv);
+    roomStatus.textContent = roomStatusText(conv);
+    highlightGlobal(false);
+  }
+
+  function highlightGlobal(active) {
+    const cls = active
+      ? "mb-3 flex min-h-11 w-full items-center gap-3 rounded-xl bg-amber-500/15 px-3 py-2 text-left ring-1 ring-amber-500/30"
+      : "mb-3 flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-2 text-left ring-1 ring-border hover:bg-muted";
+    btnGlobalDesktop.className = cls;
+    btnGlobalMobile.className = cls;
+  }
+
+  function renderConversationLists() {
+    function fill(list) {
+      list.replaceChildren();
+      if (!conversations.length) {
+        list.append(
+          el("li", "px-2 py-2 text-xs leading-snug text-muted-foreground", "Noch keine privaten Chats.")
+        );
+        return;
+      }
+      for (const conv of conversations) {
+        const item = el("li", "");
+        const btn = el(
+          "button",
+          `flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-2 text-left whitespace-normal ${
+            conv.id === activeConversationId
+              ? "bg-amber-500/15 ring-1 ring-amber-500/30"
+              : "hover:bg-muted ring-1 ring-transparent"
+          }`
+        );
+        btn.type = "button";
+        const avatarHost = el("div", "");
+        const avatarUser =
+          conv.type === "dm" && conv.peer
+            ? conv.peer
+            : { username: "Gruppe", realName: "Gruppe", avatarUrl: "" };
+        fillAvatar(avatarHost, avatarUser, "h-9 w-9");
+        const text = el("span", "min-w-0 flex-1");
+        text.append(el("span", "block break-words text-sm font-medium leading-snug", conversationLabel(conv)));
+        const preview = previewText(conv.lastMessage) || "Keine Nachrichten";
+        text.append(el("span", "mt-0.5 block break-words text-xs leading-snug text-muted-foreground", preview));
+        btn.append(avatarHost, text);
+        const badge = unreadBadge(conv.unreadCount);
+        if (badge) btn.append(badge);
+        btn.addEventListener("click", () => openConversation(conv.id));
+        item.append(btn);
+        list.append(item);
+      }
+    }
+
+    fill(convListDesktop);
+    fill(convListMobile);
+  }
+
+  async function loadConversations() {
+    try {
+      conversations = await api("/api/conversations");
+      renderConversationLists();
+      updateRoomHeader();
+    } catch {
+      conversations = [];
+      renderConversationLists();
+    }
+  }
+
+  function upsertConversation(conv) {
+    if (!conv?.id) return;
+    const idx = conversations.findIndex((c) => c.id === conv.id);
+    if (idx >= 0) conversations.splice(idx, 1);
+    conversations.unshift(conv);
+    renderConversationLists();
+  }
+
+  function bumpConversationPreview(message) {
+    if (message.conversationId == null) return;
+    const conv = conversations.find((c) => c.id === message.conversationId);
+    if (!conv) {
+      loadConversations();
+      return;
+    }
+    conv.lastMessage = {
+      content: previewText(message),
+      type: message.deleted ? "deleted" : message.type,
+      createdAt: message.createdAt,
+      deleted: Boolean(message.deleted),
+    };
+    if (!sameRoom(message.conversationId) && currentUser && message.userId !== currentUser.id) {
+      conv.unreadCount = (conv.unreadCount || 0) + 1;
+    }
+    conversations = [conv, ...conversations.filter((c) => c.id !== conv.id)];
+    renderConversationLists();
+  }
+
+  async function openConversation(conversationId) {
+    emitTyping(false);
+    setReplyTarget(null);
+    clearEdit();
+    hideReactionPicker();
+    activeConversationId = conversationId;
+    updateRoomHeader();
+    renderConversationLists();
+    setNavPanel(false);
+    messageList.replaceChildren(
+      el("p", "mx-auto mt-12 text-center text-sm text-muted-foreground", "Lade Verlauf…")
+    );
+
+    if (!socket) return;
+    socket.emit("conversation:open", { conversationId }, (ack) => {
+      if (!ack?.ok) {
+        showError(chatError, ack?.error || "Verlauf konnte nicht geladen werden.");
+      }
+    });
+  }
+
+  function openGlobal() {
+    openConversation(null);
+  }
+
+  async function startConversationWith(usernames) {
+    const names = [...new Set(usernames.map((n) => n.toLowerCase()))];
+    if (!names.length) return;
+    try {
+      const conv = await api("/api/conversations", {
+        method: "POST",
+        body: JSON.stringify({ usernames: names }),
+      });
+      upsertConversation(conv);
+      pickedUsers.clear();
+      renderPicked();
+      userSearchDesktop.value = "";
+      userSearchMobile.value = "";
+      searchResultsDesktop.replaceChildren();
+      searchResultsMobile.replaceChildren();
+      await openConversation(conv.id);
+    } catch (err) {
+      showError(chatError, err.message);
+    }
   }
 
   function renderOnlineUsers(users) {
     const count = users.length;
     onlineCountDesktop.textContent = `(${count})`;
     onlineCountMobile.textContent = `${count} online`;
+    onlineIds.clear();
+    for (const user of users) onlineIds.add(user.id);
+    updateRoomHeader();
 
     function fill(list) {
       list.replaceChildren();
       for (const user of users) {
-        const item = el("li", "flex min-h-11 items-center gap-2 rounded-xl px-2 py-1");
+        const isSelf = currentUser && user.id === currentUser.id;
+        const item = el("li", "");
+        const btn = el(
+          "button",
+          "flex min-h-11 w-full items-center gap-2 rounded-xl px-2 py-1 text-left hover:bg-muted whitespace-normal"
+        );
+        btn.type = "button";
+        btn.disabled = Boolean(isSelf);
+        const avatar = el("div", "");
+        fillAvatar(avatar, user, "h-8 w-8");
         const dot = el("span", "h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-400");
         dot.setAttribute("aria-hidden", "true");
-        const name = el("span", "break-words text-sm text-foreground", user.username);
-        if (currentUser && user.username === currentUser.username) {
-          const you = el("span", "text-xs text-muted-foreground", "(du)");
-          item.append(dot, name, you);
-        } else {
-          item.append(dot, name);
+        const text = el("span", "min-w-0 flex-1");
+        text.append(el("span", "block break-words text-sm text-foreground", displayName(user)));
+        if (user.realName) {
+          text.append(el("span", "block text-xs text-muted-foreground", `@${user.username}`));
         }
+        if (isSelf) {
+          text.append(el("span", "block text-xs text-muted-foreground", "(du)"));
+        }
+        btn.append(dot, avatar, text);
+        if (!isSelf) {
+          btn.addEventListener("click", () => {
+            setOnlinePanel(false);
+            startConversationWith([user.username]);
+          });
+        }
+        item.append(btn);
         list.append(item);
       }
     }
@@ -314,16 +1269,113 @@
     fill(userListMobile);
   }
 
+  function setOverlay(overlay, open) {
+    overlay.classList.toggle("hidden", !open);
+    overlay.hidden = !open;
+  }
+
   function setOnlinePanel(open) {
-    onlineOverlay.classList.toggle("hidden", !open);
-    onlineOverlay.hidden = !open;
+    setOverlay(onlineOverlay, open);
     btnOnline.setAttribute("aria-expanded", String(open));
     if (open) btnOnlineClose.focus();
   }
 
-  // ---------------------------------------------------------------------------
-  // Socket.io
-  // ---------------------------------------------------------------------------
+  function setNavPanel(open) {
+    setOverlay(navOverlay, open);
+    btnNav.setAttribute("aria-expanded", String(open));
+    if (open) btnNavClose.focus();
+  }
+
+  function setProfilePanel(open) {
+    setOverlay(profileOverlay, open);
+    if (open && currentUser) {
+      profileRealname.value = currentUser.realName || "";
+      profileAvatarUrl.value = currentUser.avatarUrl || "";
+      profileAvatarFile.value = "";
+      showError(profileError, "");
+      showError(profileOk, "");
+      fillAvatar(profileAvatarPreview, currentUser, "h-16 w-16");
+      btnProfileClose.focus();
+    }
+  }
+
+  function renderPicked() {
+    function fill(list) {
+      list.replaceChildren();
+      for (const user of pickedUsers.values()) {
+        const chip = el(
+          "li",
+          "inline-flex min-h-11 items-center gap-1 rounded-full bg-muted px-3 text-sm"
+        );
+        chip.append(el("span", "break-words", displayName(user)));
+        const remove = el("button", "inline-flex h-11 min-h-11 w-11 items-center justify-center rounded-full text-muted-foreground");
+        remove.type = "button";
+        remove.setAttribute("aria-label", `${displayName(user)} entfernen`);
+        remove.textContent = "×";
+        remove.addEventListener("click", () => {
+          pickedUsers.delete(user.username);
+          renderPicked();
+        });
+        chip.append(remove);
+        list.append(chip);
+      }
+    }
+    fill(searchPickedDesktop);
+    fill(searchPickedMobile);
+    const show = pickedUsers.size > 0;
+    btnStartChatDesktop.classList.toggle("hidden", !show);
+    btnStartChatDesktop.classList.toggle("flex", show);
+    btnStartChatMobile.classList.toggle("hidden", !show);
+    btnStartChatMobile.classList.toggle("flex", show);
+  }
+
+  function renderSearchResults(users) {
+    function fill(list) {
+      list.replaceChildren();
+      for (const user of users) {
+        if (pickedUsers.has(user.username)) continue;
+        const item = el("li", "");
+        const btn = el(
+          "button",
+          "flex min-h-11 w-full items-center gap-2 rounded-xl px-2 py-1 text-left hover:bg-muted whitespace-normal"
+        );
+        btn.type = "button";
+        const avatar = el("div", "");
+        fillAvatar(avatar, user, "h-8 w-8");
+        const text = el("span", "min-w-0");
+        text.append(el("span", "block break-words text-sm", displayName(user)));
+        if (user.realName) {
+          text.append(el("span", "block text-xs text-muted-foreground", `@${user.username}`));
+        }
+        btn.append(avatar, text);
+        btn.addEventListener("click", () => {
+          pickedUsers.set(user.username, user);
+          renderPicked();
+          renderSearchResults(users);
+        });
+        item.append(btn);
+        list.append(item);
+      }
+    }
+    fill(searchResultsDesktop);
+    fill(searchResultsMobile);
+  }
+
+  async function searchUsers(query) {
+    try {
+      const q = encodeURIComponent(query.trim());
+      const users = await api(`/api/users?q=${q}`);
+      renderSearchResults(users);
+    } catch {
+      renderSearchResults([]);
+    }
+  }
+
+  function scheduleSearch(query) {
+    window.clearTimeout(searchTimer);
+    searchTimer = window.setTimeout(() => searchUsers(query), 250);
+  }
+
   function teardownSocket() {
     if (socket) {
       socket.removeAllListeners();
@@ -344,21 +1396,105 @@
       showError(chatError, "Verbindung fehlgeschlagen. Bitte neu anmelden.");
     });
 
-    socket.on("messages:history", (messages) => {
-      renderHistory(Array.isArray(messages) ? messages : []);
+    socket.on("messages:history", (payload) => {
+      const conversationId = payload?.conversationId ?? null;
+      const messages = Array.isArray(payload?.messages)
+        ? payload.messages
+        : Array.isArray(payload)
+          ? payload
+          : [];
+      if (!sameRoom(conversationId)) return;
+      renderHistory(messages);
       showError(chatError, "");
     });
 
     socket.on("message:new", (message) => {
+      bumpConversationPreview(message);
+      notifyIncoming(message);
+      if (!sameRoom(message.conversationId ?? null)) return;
       const emptyHint = messageList.querySelector("p");
       if (emptyHint && !messageList.querySelector("article")) {
         emptyHint.remove();
       }
       appendMessage(message);
+      if (currentUser && message.userId !== currentUser.id) loadSmartReplies();
+    });
+
+    socket.on("message:edited", (message) => {
+      if (!message?.id) return;
+      messagesById.set(message.id, message);
+      bumpConversationPreview(message);
+      if (!sameRoom(message.conversationId ?? null)) return;
+      if (seenMessageIds.has(message.id)) replaceMessageRow(message);
+    });
+
+    socket.on("receipt:update", (payload) => {
+      if (!payload || Number(payload.conversationId) !== Number(activeConversationId)) return;
+      const conv = activeConversation();
+      if (!conv || conv.type !== "dm") return;
+      if (currentUser && payload.userId === currentUser.id) return;
+      conv.peerLastReadMessageId = payload.lastReadMessageId;
+      refreshReceipts();
+    });
+
+    socket.on("conversation:updated", (conv) => {
+      upsertConversation(conv);
+      if (Number(conv?.id) === Number(activeConversationId)) updateRoomHeader();
+    });
+
+    socket.on("conversation:left", (payload) => {
+      const id = payload?.conversationId;
+      conversations = conversations.filter((c) => c.id !== id);
+      renderConversationLists();
+      if (Number(id) === Number(activeConversationId)) openGlobal();
+    });
+
+    socket.on("message:deleted", (message) => {
+      if (!message?.id) return;
+      messagesById.set(message.id, message);
+      bumpConversationPreview(message);
+      if (!sameRoom(message.conversationId ?? null)) return;
+      if (seenMessageIds.has(message.id)) replaceMessageRow(message);
+    });
+
+    socket.on("reaction:update", (payload) => {
+      if (!payload?.messageId) return;
+      const message = messagesById.get(payload.messageId);
+      if (!message) return;
+      message.reactions = payload.reactions || [];
+      const row = messageList.querySelector(`[data-message-id="${payload.messageId}"]`);
+      if (row) applyReactions(row, message);
+    });
+
+    socket.on("typing:update", (payload) => {
+      if (!sameRoom(payload?.conversationId ?? null)) return;
+      renderTyping(payload?.typers);
+    });
+
+    socket.on("inbox:unread", (payload) => {
+      applyUnread(payload || {});
+    });
+
+    socket.on("conversation:new", (conv) => {
+      upsertConversation(conv);
     });
 
     socket.on("users:online", (users) => {
       renderOnlineUsers(Array.isArray(users) ? users : []);
+    });
+
+    socket.on("user:updated", (user) => {
+      if (!user?.id) return;
+      if (currentUser && user.id === currentUser.id) {
+        currentUser = { ...currentUser, ...user };
+        refreshSelfUi();
+      }
+      for (const conv of conversations) {
+        conv.members = (conv.members || []).map((m) => (m.id === user.id ? { ...m, ...user } : m));
+        if (conv.peer?.id === user.id) conv.peer = { ...conv.peer, ...user };
+      }
+      renderConversationLists();
+      updateRoomHeader();
     });
 
     socket.on("chat:error", (message) => {
@@ -366,9 +1502,31 @@
     });
   }
 
+  function emitMessage(payload) {
+    return new Promise((resolve, reject) => {
+      if (!socket) {
+        reject(new Error("Keine Verbindung."));
+        return;
+      }
+      const body = { ...payload };
+      if (activeConversationId != null) body.conversationId = activeConversationId;
+      if (replyTarget?.id) body.replyToId = replyTarget.id;
+      socket.emit("message:send", body, (ack) => {
+        if (!ack?.ok) {
+          reject(new Error(ack?.error || "Senden fehlgeschlagen."));
+          return;
+        }
+        setReplyTarget(null);
+        emitTyping(false);
+        resolve(ack);
+      });
+    });
+  }
+
   async function handleSend(event) {
     event.preventDefault();
     showError(chatError, "");
+    if (mediaRecorder) return;
 
     const content = messageInput.value.trim();
     if (!content || !socket) return;
@@ -378,20 +1536,346 @@
     }
 
     btnSend.disabled = true;
-    socket.emit("message:send", { content }, (ack) => {
-      btnSend.disabled = false;
-      if (!ack?.ok) {
-        showError(chatError, ack?.error || "Senden fehlgeschlagen.");
-        return;
+    try {
+      if (editingId) {
+        await new Promise((resolve, reject) => {
+          socket.emit("message:edit", { messageId: editingId, content }, (ack) => {
+            if (!ack?.ok) reject(new Error(ack?.error || "Bearbeiten fehlgeschlagen."));
+            else resolve(ack);
+          });
+        });
+        clearEdit();
+      } else {
+        await emitMessage({ type: "text", content });
+        setReplyTarget(null);
       }
       messageInput.value = "";
+      emitTyping(false);
       messageInput.focus();
+    } catch (err) {
+      showError(chatError, err.message);
+    } finally {
+      btnSend.disabled = false;
+    }
+  }
+
+  async function uploadFile(kind, file, extra = {}) {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("kind", kind);
+    if (extra.durationMs != null) form.append("durationMs", String(extra.durationMs));
+    return api("/api/uploads", { method: "POST", body: form });
+  }
+
+  async function handleImagePicked(event) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    showError(chatError, "");
+    btnAttachImage.disabled = true;
+    try {
+      const saved = await uploadFile("image", file);
+      const caption = messageInput.value.trim();
+      await emitMessage({ type: "image", uploadId: saved.id, content: caption });
+      if (caption) messageInput.value = "";
+    } catch (err) {
+      showError(chatError, err.message);
+    } finally {
+      btnAttachImage.disabled = false;
+    }
+  }
+
+  function handleLocation() {
+    showError(chatError, "");
+    if (!navigator.geolocation) {
+      showError(chatError, "Standort wird von diesem Browser nicht unterstützt.");
+      return;
+    }
+    btnAttachLocation.disabled = true;
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        try {
+          await emitMessage({
+            type: "location",
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude,
+            accuracy: pos.coords.accuracy,
+          });
+        } catch (err) {
+          showError(chatError, err.message);
+        } finally {
+          btnAttachLocation.disabled = false;
+        }
+      },
+      (err) => {
+        btnAttachLocation.disabled = false;
+        if (err.code === err.PERMISSION_DENIED) {
+          showError(chatError, "Standortzugriff wurde verweigert.");
+        } else {
+          showError(chatError, "Standort konnte nicht ermittelt werden.");
+        }
+      },
+      { enableHighAccuracy: true, timeout: 12_000, maximumAge: 10_000 }
+    );
+  }
+
+  function pickRecorderMime() {
+    const candidates = [
+      "audio/webm;codecs=opus",
+      "audio/webm",
+      "audio/mp4",
+      "audio/ogg;codecs=opus",
+    ];
+    if (typeof MediaRecorder === "undefined") return "";
+    return candidates.find((type) => MediaRecorder.isTypeSupported(type)) || "";
+  }
+
+  function stopTracks() {
+    if (recordStream) {
+      if (recordStream._speech) {
+        try {
+          recordStream._speech.stop();
+        } catch {
+          // ignore
+        }
+      }
+      for (const track of recordStream.getTracks()) track.stop();
+      recordStream = null;
+    }
+  }
+
+  function stopRecording(send) {
+    window.clearInterval(recordInterval);
+    window.clearTimeout(recordStopTimer);
+    recordInterval = null;
+    recordStopTimer = null;
+    recordBar.classList.add("hidden");
+    recordBar.classList.remove("flex");
+    btnAttachVoice.disabled = false;
+
+    const recorder = mediaRecorder;
+    mediaRecorder = null;
+    if (!recorder) {
+      stopTracks();
+      return;
+    }
+
+    recorder.onstop = async () => {
+      const durationMs = Date.now() - recordStartedAt;
+      const blob = new Blob(recordChunks, { type: recordMime || "audio/webm" });
+      recordChunks = [];
+      stopTracks();
+      if (!send) return;
+      if (blob.size < 200) {
+        showError(chatError, "Aufnahme war zu kurz.");
+        return;
+      }
+      try {
+        const ext = (recordMime || "").includes("mp4") ? "m4a" : "webm";
+        const file = new File([blob], `voice.${ext}`, { type: blob.type || "audio/webm" });
+        const saved = await uploadFile("voice", file, { durationMs });
+        await emitMessage({ type: "voice", uploadId: saved.id, transcript: voiceTranscript });
+        voiceTranscript = "";
+      } catch (err) {
+        showError(chatError, err.message);
+      }
+    };
+
+    if (recorder.state !== "inactive") recorder.stop();
+    else recorder.onstop();
+  }
+
+  async function startRecording() {
+    showError(chatError, "");
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      showError(chatError, "Sprachnachrichten werden von diesem Browser nicht unterstützt.");
+      return;
+    }
+    try {
+      recordStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      recordMime = pickRecorderMime();
+      mediaRecorder = recordMime
+        ? new MediaRecorder(recordStream, { mimeType: recordMime })
+        : new MediaRecorder(recordStream);
+      recordChunks = [];
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data && event.data.size) recordChunks.push(event.data);
+      };
+      mediaRecorder.start(250);
+      recordStartedAt = Date.now();
+      recordBar.classList.remove("hidden");
+      recordBar.classList.add("flex");
+      recordTimer.textContent = "0:00";
+      btnAttachVoice.disabled = true;
+      recordInterval = window.setInterval(() => {
+        recordTimer.textContent = formatDuration(Date.now() - recordStartedAt);
+      }, 200);
+      recordStopTimer = window.setTimeout(() => stopRecording(true), MAX_VOICE_MS);
+      startVoiceTranscript();
+    } catch {
+      stopTracks();
+      showError(chatError, "Mikrofonzugriff wurde verweigert oder ist nicht verfügbar.");
+    }
+  }
+
+  function startVoiceTranscript() {
+    voiceTranscript = "";
+    const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Speech) return;
+    try {
+      const rec = new Speech();
+      rec.lang = "de-DE";
+      rec.interimResults = true;
+      rec.continuous = true;
+      rec.onresult = (event) => {
+        let text = "";
+        for (let i = 0; i < event.results.length; i += 1) {
+          text += event.results[i][0].transcript;
+        }
+        voiceTranscript = text.trim();
+      };
+      rec.start();
+      recordStream._speech = rec;
+    } catch {
+      // Web Speech ist optional.
+    }
+  }
+
+  async function handleFilePicked(event) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    showError(chatError, "");
+    btnAttachFile.disabled = true;
+    try {
+      const saved = await uploadFile("file", file);
+      const caption = messageInput.value.trim();
+      await emitMessage({ type: "file", uploadId: saved.id, content: caption });
+      if (caption) messageInput.value = "";
+    } catch (err) {
+      showError(chatError, err.message);
+    } finally {
+      btnAttachFile.disabled = false;
+    }
+  }
+
+  async function handleProfileSubmit(event) {
+    event.preventDefault();
+    showError(profileError, "");
+    showError(profileOk, "");
+    profileSubmit.disabled = true;
+
+    try {
+      if (profileAvatarFile.files?.[0]) {
+        const form = new FormData();
+        form.append("file", profileAvatarFile.files[0]);
+        currentUser = await api("/api/me/avatar", { method: "POST", body: form });
+        profileAvatarFile.value = "";
+        profileAvatarUrl.value = currentUser.avatarUrl || "";
+      }
+
+      currentUser = await api("/api/me", {
+        method: "PATCH",
+        body: JSON.stringify({
+          realName: profileRealname.value,
+          avatarUrl: profileAvatarUrl.value.trim(),
+        }),
+      });
+      refreshSelfUi();
+      showError(profileOk, "Profil gespeichert.");
+    } catch (err) {
+      showError(profileError, err.message);
+    } finally {
+      profileSubmit.disabled = false;
+    }
+  }
+
+  function setSearchPanel(open) {
+    setOverlay(searchOverlay, open);
+    if (open) {
+      showError(searchError, "");
+      searchQuery.focus();
+    }
+  }
+
+  function setChatMenu(open) {
+    setOverlay(chatMenuOverlay, open);
+    btnChatMenu.setAttribute("aria-expanded", String(open));
+    const conv = activeConversation();
+    const isGroup = Boolean(conv && conv.type === "group");
+    groupTools.classList.toggle("hidden", !isGroup);
+    groupTools.classList.toggle("flex", isGroup);
+    if (isGroup) groupTitle.value = conv.title || "";
+    if (summaryBox) {
+      summaryBox.classList.add("hidden");
+      summaryBox.textContent = "";
+    }
+    if (aiHint && aiStatus) {
+      aiHint.textContent = aiStatus.enabled
+        ? "Sprachmodell ist aktiv. Kurzfassung und Vorschläge können vom Modell kommen."
+        : "Kurzfassung und Antwortvorschläge laufen lokal. Mit AI_ENABLED und AI_API_KEY in der .env übernimmt ein Modell.";
+    }
+    if (btnNotify) {
+      btnNotify.textContent =
+        notifyPermission === "granted" ? "Benachrichtigungen an" : "Benachrichtigungen erlauben";
+    }
+  }
+
+  function markCurrentUnread() {
+    if (!socket) return;
+    socket.emit("conversation:unread", { conversationId: activeConversationId }, (ack) => {
+      if (!ack?.ok) {
+        showError(chatError, ack?.error || "Konnte nicht als ungelesen markiert werden.");
+        return;
+      }
+      applyUnread({ conversationId: activeConversationId, unreadCount: ack.unreadCount });
+      setChatMenu(false);
     });
   }
 
-  // ---------------------------------------------------------------------------
-  // Events
-  // ---------------------------------------------------------------------------
+  async function runMessageSearch() {
+    const q = searchQuery.value.trim();
+    showError(searchError, "");
+    searchResults.replaceChildren();
+    if (q.length < 2) return;
+    try {
+      const params = new URLSearchParams({ q });
+      if (searchCurrentOnly.checked) {
+        params.set("conversationId", activeConversationId == null ? "global" : String(activeConversationId));
+      }
+      const data = await api(`/api/search?${params.toString()}`);
+      const results = data.results || [];
+      if (!results.length) {
+        searchResults.append(el("li", "px-2 py-3 text-sm text-muted-foreground", "Keine Treffer."));
+        return;
+      }
+      for (const item of results) {
+        const message = item.message;
+        const li = el("li", "");
+        const btn = el(
+          "button",
+          "flex min-h-11 w-full flex-col items-start gap-0.5 rounded-xl px-3 py-2 text-left whitespace-normal hover:bg-muted"
+        );
+        btn.type = "button";
+        btn.append(
+          el("span", "text-xs text-amber-400", item.roomLabel || "Chat"),
+          el("span", "text-sm font-medium text-foreground", displayName(message)),
+          el("span", "line-clamp-2 break-words text-sm text-muted-foreground", previewText(message)),
+          el("span", "text-xs text-muted-foreground", formatTime(message.createdAt))
+        );
+        btn.addEventListener("click", async () => {
+          setSearchPanel(false);
+          await openConversation(message.conversationId ?? null);
+          window.setTimeout(() => scrollToMessage(message.id), 80);
+        });
+        li.append(btn);
+        searchResults.append(li);
+      }
+    } catch (err) {
+      showError(searchError, err.message);
+    }
+  }
+
   tabLogin.addEventListener("click", () => setAuthMode("login"));
   tabRegister.addEventListener("click", () => setAuthMode("register"));
   formAuth.addEventListener("submit", handleAuthSubmit);
@@ -400,11 +1884,142 @@
   btnOnline.addEventListener("click", () => setOnlinePanel(true));
   btnOnlineClose.addEventListener("click", () => setOnlinePanel(false));
   onlineBackdrop.addEventListener("click", () => setOnlinePanel(false));
+  btnNav.addEventListener("click", () => setNavPanel(true));
+  btnNavClose.addEventListener("click", () => setNavPanel(false));
+  navBackdrop.addEventListener("click", () => setNavPanel(false));
+  btnGlobalDesktop.addEventListener("click", openGlobal);
+  btnGlobalMobile.addEventListener("click", openGlobal);
+  btnProfile.addEventListener("click", () => setProfilePanel(true));
+  btnProfileClose.addEventListener("click", () => setProfilePanel(false));
+  profileBackdrop.addEventListener("click", () => setProfilePanel(false));
+  formProfile.addEventListener("submit", handleProfileSubmit);
+  btnAttachImage.addEventListener("click", () => inputImage.click());
+  inputImage.addEventListener("change", handleImagePicked);
+  btnAttachFile.addEventListener("click", () => inputFile.click());
+  inputFile.addEventListener("change", handleFilePicked);
+  btnAttachLocation.addEventListener("click", handleLocation);
+  btnAttachVoice.addEventListener("click", startRecording);
+  btnRecordCancel.addEventListener("click", () => stopRecording(false));
+  btnRecordSend.addEventListener("click", () => stopRecording(true));
+  btnReplyCancel.addEventListener("click", () => setReplyTarget(null));
+  btnSearch.addEventListener("click", () => setSearchPanel(true));
+  btnSearchClose.addEventListener("click", () => setSearchPanel(false));
+  searchBackdrop.addEventListener("click", () => setSearchPanel(false));
+  btnChatMenu.addEventListener("click", () => setChatMenu(true));
+  btnChatMenuClose.addEventListener("click", () => setChatMenu(false));
+  chatMenuBackdrop.addEventListener("click", () => setChatMenu(false));
+  btnMarkUnread.addEventListener("click", markCurrentUnread);
+  btnSummarize.addEventListener("click", async () => {
+    showError(chatError, "");
+    btnSummarize.disabled = true;
+    try {
+      const data = await api("/api/ai/summarize", {
+        method: "POST",
+        body: JSON.stringify({ conversationId: activeConversationId }),
+      });
+      summaryBox.textContent = data.summary || "Keine Zusammenfassung.";
+      summaryBox.classList.remove("hidden");
+    } catch (err) {
+      showError(chatError, err.message);
+    } finally {
+      btnSummarize.disabled = false;
+    }
+  });
+  btnNotify.addEventListener("click", async () => {
+    if (typeof Notification === "undefined") {
+      showError(chatError, "Dieser Browser unterstützt keine Benachrichtigungen.");
+      return;
+    }
+    const perm = await Notification.requestPermission();
+    notifyPermission = perm;
+    btnNotify.textContent = perm === "granted" ? "Benachrichtigungen an" : "Benachrichtigungen erlauben";
+  });
+  btnGroupTitle.addEventListener("click", async () => {
+    try {
+      const conv = await api(`/api/conversations/${activeConversationId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ title: groupTitle.value }),
+      });
+      upsertConversation(conv);
+      updateRoomHeader();
+    } catch (err) {
+      showError(chatError, err.message);
+    }
+  });
+  btnGroupAdd.addEventListener("click", async () => {
+    try {
+      const conv = await api(`/api/conversations/${activeConversationId}/members`, {
+        method: "POST",
+        body: JSON.stringify({ username: groupAddUser.value.trim() }),
+      });
+      groupAddUser.value = "";
+      upsertConversation(conv);
+      updateRoomHeader();
+    } catch (err) {
+      showError(chatError, err.message);
+    }
+  });
+  btnGroupLeave.addEventListener("click", async () => {
+    try {
+      await api(`/api/conversations/${activeConversationId}/members/me`, { method: "DELETE" });
+      setChatMenu(false);
+    } catch (err) {
+      showError(chatError, err.message);
+    }
+  });
+  btnAssistantDesktop.addEventListener("click", openAssistant);
+  btnAssistantMobile.addEventListener("click", openAssistant);
+  btnForwardClose.addEventListener("click", () => setForwardPanel(false));
+  forwardBackdrop.addEventListener("click", () => setForwardPanel(false));
+  messageInput.addEventListener("input", () => {
+    if (messageInput.value.trim()) scheduleTyping();
+    else if (typingSent) emitTyping(false);
+  });
+  formSearch.addEventListener("submit", (event) => {
+    event.preventDefault();
+    runMessageSearch();
+  });
+  searchQuery.addEventListener("input", () => {
+    window.clearTimeout(msgSearchTimer);
+    msgSearchTimer = window.setTimeout(runMessageSearch, 280);
+  });
+  searchCurrentOnly.addEventListener("change", runMessageSearch);
+  document.addEventListener("click", (event) => {
+    if (reactionPicker && !reactionPicker.contains(event.target)) {
+      hideReactionPicker();
+    }
+  });
+
+  formSearchDesktop.addEventListener("submit", (event) => {
+    event.preventDefault();
+    startConversationWith([...pickedUsers.keys()]);
+  });
+  formSearchMobile.addEventListener("submit", (event) => {
+    event.preventDefault();
+    startConversationWith([...pickedUsers.keys()]);
+  });
+  userSearchDesktop.addEventListener("input", () => {
+    userSearchMobile.value = userSearchDesktop.value;
+    scheduleSearch(userSearchDesktop.value);
+  });
+  userSearchMobile.addEventListener("input", () => {
+    userSearchDesktop.value = userSearchMobile.value;
+    scheduleSearch(userSearchMobile.value);
+  });
+  userSearchDesktop.addEventListener("focus", () => scheduleSearch(userSearchDesktop.value));
+  userSearchMobile.addEventListener("focus", () => scheduleSearch(userSearchMobile.value));
 
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && !onlineOverlay.hidden) {
-      setOnlinePanel(false);
-    }
+    if (event.key !== "Escape") return;
+    if (reactionPicker) hideReactionPicker();
+    else if (!forwardOverlay.hidden) setForwardPanel(false);
+    else if (!searchOverlay.hidden) setSearchPanel(false);
+    else if (!chatMenuOverlay.hidden) setChatMenu(false);
+    else if (!profileOverlay.hidden) setProfilePanel(false);
+    else if (!onlineOverlay.hidden) setOnlinePanel(false);
+    else if (!navOverlay.hidden) setNavPanel(false);
+    else if (replyTarget) setReplyTarget(null);
+    else if (mediaRecorder) stopRecording(false);
   });
 
   setAuthMode("login");

@@ -53,6 +53,9 @@ services:
     ports:
       # Nur die App ist vom Host erreichbar (Standard: http://localhost:3355).
       - "${APP_PORT:-3355}:3355"
+    volumes:
+      # Bilder und Sprachnachrichten — nur über authentifizierte /api/files/:id erreichbar.
+      - uploads_data:/usr/src/app/uploads
     depends_on:
       db:
         condition: service_healthy
@@ -62,6 +65,7 @@ services:
 # Persistentes Volume für PostgreSQL-Datenverzeichnis
 volumes:
   postgres_data:
+  uploads_data:
 
 # Isoliertes Bridge-Netz: App und DB sehen sich, die DB hat kein Host-Mapping.
 networks:

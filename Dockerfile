@@ -42,6 +42,9 @@ COPY --chown=node:node package.json ./
 COPY --chown=node:node server.js ./
 COPY --chown=node:node public ./public
 
+# Upload-Verzeichnis: Named Volume übernimmt Besitz beim ersten Mount aus dem Image.
+RUN mkdir -p /usr/src/app/uploads && chown node:node /usr/src/app/uploads
+
 USER node
 
 EXPOSE 3355

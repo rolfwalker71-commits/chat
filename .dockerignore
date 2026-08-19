@@ -1,5 +1,6 @@
 # Verhindert, dass lokale Artefakte das Image aufblähen oder Secrets ins Image gelangen
 node_modules
+uploads
 npm-debug.log
 .git
 .gitignore
