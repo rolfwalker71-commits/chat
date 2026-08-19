@@ -104,6 +104,60 @@
         outline-offset: 2px;
         border-radius: 1rem;
       }
+
+      #message-list article {
+        -webkit-touch-callout: none;
+        touch-action: manipulation;
+      }
+
+      #message-list [data-bubble] {
+        transition: transform 0.14s ease;
+      }
+
+      #message-list article.msg-press {
+        user-select: none;
+        -webkit-user-select: none;
+      }
+
+      #message-list article.msg-press [data-bubble] {
+        transform: scale(0.97);
+      }
+
+      @keyframes msg-menu-float {
+        from {
+          opacity: 0;
+          transform: translateY(6px) scale(0.98);
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+
+      @keyframes msg-menu-sheet {
+        from {
+          transform: translateY(100%);
+        }
+        to {
+          transform: none;
+        }
+      }
+
+      .msg-menu-float {
+        animation: msg-menu-float 0.14s ease-out;
+      }
+
+      .msg-menu-sheet {
+        animation: msg-menu-sheet 0.22s ease-out;
+      }
+
+      #btn-attach {
+        transition: transform 0.16s ease;
+      }
+
+      #btn-attach[aria-expanded="true"] {
+        transform: rotate(45deg);
+      }
     </style>
   </head>
   <body class="h-full min-h-dvh bg-background font-sans antialiased bg-grid">
@@ -485,7 +539,96 @@
               </div>
             </div>
 
+            <div
+              id="attach-tray"
+              class="mb-3 hidden grid grid-cols-4 gap-2"
+              hidden
+              role="menu"
+              aria-label="Anhang"
+            >
+              <button
+                type="button"
+                id="btn-attach-image"
+                role="menuitem"
+                class="flex h-auto min-h-0 flex-col items-center gap-1 rounded-2xl px-1 py-2 text-foreground hover:bg-muted"
+              >
+                <span
+                  class="inline-flex h-11 min-h-11 w-11 items-center justify-center rounded-full bg-muted text-amber-400"
+                  aria-hidden="true"
+                >
+                  <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="5" width="18" height="14" rx="2" />
+                    <circle cx="8.5" cy="10" r="1.5" />
+                    <path d="m21 15-5-5L5 19" />
+                  </svg>
+                </span>
+                <span class="text-xs font-medium leading-snug">Bild</span>
+              </button>
+              <button
+                type="button"
+                id="btn-attach-location"
+                role="menuitem"
+                class="flex h-auto min-h-0 flex-col items-center gap-1 rounded-2xl px-1 py-2 text-foreground hover:bg-muted"
+              >
+                <span
+                  class="inline-flex h-11 min-h-11 w-11 items-center justify-center rounded-full bg-muted text-amber-400"
+                  aria-hidden="true"
+                >
+                  <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11Z" />
+                    <circle cx="12" cy="10" r="2.5" />
+                  </svg>
+                </span>
+                <span class="text-xs font-medium leading-snug">Standort</span>
+              </button>
+              <button
+                type="button"
+                id="btn-attach-voice"
+                role="menuitem"
+                class="flex h-auto min-h-0 flex-col items-center gap-1 rounded-2xl px-1 py-2 text-foreground hover:bg-muted"
+              >
+                <span
+                  class="inline-flex h-11 min-h-11 w-11 items-center justify-center rounded-full bg-muted text-amber-400"
+                  aria-hidden="true"
+                >
+                  <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="9" y="3" width="6" height="11" rx="3" />
+                    <path d="M5 11a7 7 0 0 0 14 0" />
+                    <path d="M12 18v3" />
+                  </svg>
+                </span>
+                <span class="text-xs font-medium leading-snug">Sprache</span>
+              </button>
+              <button
+                type="button"
+                id="btn-attach-file"
+                role="menuitem"
+                class="flex h-auto min-h-0 flex-col items-center gap-1 rounded-2xl px-1 py-2 text-foreground hover:bg-muted"
+              >
+                <span
+                  class="inline-flex h-11 min-h-11 w-11 items-center justify-center rounded-full bg-muted text-amber-400"
+                  aria-hidden="true"
+                >
+                  <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14.5 2H8a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7.5L14.5 2Z" />
+                    <path d="M14 2v6h6" />
+                  </svg>
+                </span>
+                <span class="text-xs font-medium leading-snug">Datei</span>
+              </button>
+            </div>
+
             <div class="flex items-end gap-2">
+              <button
+                type="button"
+                id="btn-attach"
+                class="inline-flex h-12 min-h-11 w-12 shrink-0 items-center justify-center rounded-xl bg-muted text-2xl font-medium leading-none text-foreground hover:bg-zinc-800"
+                aria-expanded="false"
+                aria-controls="attach-tray"
+                aria-label="Anhang hinzufügen"
+              >
+                +
+              </button>
               <label for="message-input" class="sr-only">Nachricht</label>
               <input
                 id="message-input"
@@ -502,37 +645,6 @@
                 class="inline-flex h-12 min-h-11 shrink-0 items-center justify-center rounded-xl bg-amber-500 px-5 text-sm font-semibold text-zinc-950 hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 Senden
-              </button>
-            </div>
-
-            <div class="mt-2 flex flex-wrap gap-2">
-              <button
-                type="button"
-                id="btn-attach-image"
-                class="inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-sm font-medium text-foreground ring-1 ring-border hover:bg-muted"
-              >
-                Bild
-              </button>
-              <button
-                type="button"
-                id="btn-attach-location"
-                class="inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-sm font-medium text-foreground ring-1 ring-border hover:bg-muted"
-              >
-                Standort
-              </button>
-              <button
-                type="button"
-                id="btn-attach-voice"
-                class="inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-sm font-medium text-foreground ring-1 ring-border hover:bg-muted"
-              >
-                Sprache
-              </button>
-              <button
-                type="button"
-                id="btn-attach-file"
-                class="inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-sm font-medium text-foreground ring-1 ring-border hover:bg-muted"
-              >
-                Datei
               </button>
             </div>
             <input
@@ -998,6 +1110,28 @@
           <ul id="search-results" class="mt-3 flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto"></ul>
         </section>
       </div>
+    </div>
+
+    <div id="message-menu-overlay" class="fixed inset-0 z-50 hidden" hidden>
+      <button
+        type="button"
+        id="message-menu-backdrop"
+        class="absolute inset-0 bg-black/60"
+        aria-label="Nachrichtenmenü schließen"
+      ></button>
+      <section
+        id="message-menu"
+        class="absolute z-10 bg-card shadow-2xl ring-1 ring-border/80"
+        role="menu"
+        aria-label="Nachrichtenaktionen"
+      >
+        <p id="message-menu-handle" class="mx-auto mb-3 hidden h-1 w-10 rounded-full bg-muted" aria-hidden="true"></p>
+        <div
+          id="message-menu-reactions"
+          class="flex h-14 min-h-14 items-center justify-around rounded-full bg-muted p-1.5"
+        ></div>
+        <ul id="message-menu-actions" class="mt-3 flex flex-col gap-1"></ul>
+      </section>
     </div>
 
     <div id="forward-overlay" class="fixed inset-0 z-50 hidden" hidden>

@@ -93,6 +93,8 @@
   const profileError = document.getElementById("profile-error");
   const profileOk = document.getElementById("profile-ok");
   const profileSubmit = document.getElementById("profile-submit");
+  const btnAttach = document.getElementById("btn-attach");
+  const attachTray = document.getElementById("attach-tray");
   const btnAttachImage = document.getElementById("btn-attach-image");
   const btnAttachLocation = document.getElementById("btn-attach-location");
   const btnAttachVoice = document.getElementById("btn-attach-voice");
@@ -139,6 +141,12 @@
   const btnAssistantDesktop = document.getElementById("btn-assistant-desktop");
   const btnAssistantMobile = document.getElementById("btn-assistant-mobile");
   const forwardOverlay = document.getElementById("forward-overlay");
+  const messageMenuOverlay = document.getElementById("message-menu-overlay");
+  const messageMenuBackdrop = document.getElementById("message-menu-backdrop");
+  const messageMenu = document.getElementById("message-menu");
+  const messageMenuHandle = document.getElementById("message-menu-handle");
+  const messageMenuReactions = document.getElementById("message-menu-reactions");
+  const messageMenuActions = document.getElementById("message-menu-actions");
   const forwardBackdrop = document.getElementById("forward-backdrop");
   const btnForwardClose = document.getElementById("btn-forward-close");
   const forwardTargets = document.getElementById("forward-targets");
@@ -168,6 +176,7 @@
   let aiStatus = null;
   /** @type {HTMLElement | null} */
   let reactionPicker = null;
+  let ignoreMenuClickUntil = 0;
   let editingId = null;
   let forwardMessageId = null;
   let voiceTranscript = "";
@@ -341,6 +350,14 @@
     formSearchMobile.classList.toggle("opacity-50", locked);
     btnAssistantDesktop.disabled = locked;
     btnAssistantMobile.disabled = locked;
+    if (locked) setAttachTray(false);
+  }
+
+  function setAttachTray(open) {
+    attachTray.classList.toggle("hidden", !open);
+    attachTray.hidden = !open;
+    btnAttach.setAttribute("aria-expanded", String(open));
+    btnAttach.setAttribute("aria-label", open ? "Anhang schließen" : "Anhang hinzufügen");
   }
 
   function setAdminPendingBadge(count) {
@@ -482,6 +499,8 @@
     globalUnread = 0;
     aiStatus = null;
     hideReactionPicker();
+    hideMessageMenu();
+    setAttachTray(false);
     setReplyTarget(null);
     messageList.replaceChildren();
     setNavPanel(false);
@@ -829,6 +848,15 @@
     }
   }
 
+  function hideMessageMenu() {
+    hideReactionPicker();
+    if (!messageMenuOverlay) return;
+    setOverlay(messageMenuOverlay, false);
+    messageMenu.style.left = "";
+    messageMenu.style.top = "";
+    messageMenu.classList.remove("msg-menu-float", "msg-menu-sheet");
+  }
+
   function toggleReaction(messageId, emoji) {
     if (!socket || !messageId) return;
     socket.emit("reaction:toggle", { messageId, emoji }, (ack) => {
@@ -836,37 +864,232 @@
     });
   }
 
-  function showReactionPicker(anchor, message) {
+  function usesTouchMenu() {
+    return window.matchMedia("(pointer: coarse)").matches || window.matchMedia("(max-width: 640px)").matches;
+  }
+
+  function isMessageChrome(target) {
+    return Boolean(target && target.closest && target.closest("audio, input, textarea, button, select"));
+  }
+
+  function openMessageMenu(message, x, y) {
+    if (!message?.id || message.deleted) return;
     hideReactionPicker();
-    const picker = el(
-      "div",
-      "absolute z-20 mt-1 flex flex-wrap gap-1 rounded-2xl bg-zinc-950 p-1 shadow-xl ring-1 ring-border"
-    );
-    picker.setAttribute("role", "menu");
-    picker.setAttribute("aria-label", "Reaktion wählen");
+
+    const mine = Boolean(currentUser && message.userId === currentUser.id);
+    const posting = canPost();
+    const textType = (message.type || "text") === "text";
+    const asSheet = usesTouchMenu();
+
+    messageMenuReactions.replaceChildren();
     for (const emoji of ALLOWED_REACTIONS) {
+      const active = (message.reactions || []).some((reaction) => reaction.emoji === emoji && reaction.mine);
       const btn = el(
         "button",
-        "inline-flex h-11 min-h-11 w-11 items-center justify-center rounded-xl text-lg hover:bg-muted",
-        emoji
+        `h-full min-h-0 max-h-full w-11 flex-1 rounded-full text-lg leading-none ${
+          active ? "bg-background text-foreground shadow-sm shadow-black/40" : "text-muted-foreground"
+        }`
       );
       btn.type = "button";
+      btn.setAttribute("role", "menuitem");
       btn.setAttribute("aria-label", `Reaktion ${emoji}`);
-      btn.addEventListener("click", (event) => {
-        event.stopPropagation();
+      btn.setAttribute("aria-pressed", String(active));
+      btn.disabled = !posting;
+      btn.textContent = emoji;
+      btn.addEventListener("click", () => {
+        if (!posting) return;
         toggleReaction(message.id, emoji);
-        hideReactionPicker();
+        hideMessageMenu();
       });
-      picker.append(btn);
+      messageMenuReactions.append(btn);
     }
-    const wrap = anchor.closest("article") || anchor.parentElement;
-    wrap.style.position = "relative";
-    wrap.append(picker);
-    reactionPicker = picker;
+    messageMenuReactions.classList.toggle("hidden", !posting);
+
+    messageMenuActions.replaceChildren();
+    const items = [];
+    if (posting) {
+      items.push({ label: "Antworten", run: () => setReplyTarget(message) });
+    }
+    if (textType && message.content) {
+      items.push({
+        label: "Kopieren",
+        run: async () => {
+          try {
+            await navigator.clipboard.writeText(message.content);
+          } catch {
+            showError(chatError, "Text konnte nicht kopiert werden.");
+          }
+        },
+      });
+    }
+    if (posting && mine && textType) {
+      items.push({ label: "Bearbeiten", run: () => startEdit(message) });
+    }
+    if (posting) {
+      items.push({ label: "Weiterleiten", run: () => openForward(message.id) });
+    }
+    if (posting && mine) {
+      items.push({ label: "Löschen", run: () => deleteMessage(message.id), danger: true });
+    }
+
+    for (const item of items) {
+      const li = el("li", "");
+      const btn = el(
+        "button",
+        `flex h-11 min-h-11 w-full items-center rounded-xl px-3 text-left text-sm font-medium ${
+          item.danger
+            ? "text-red-200 hover:bg-red-950/60"
+            : "text-foreground hover:bg-muted"
+        }`,
+        item.label
+      );
+      btn.type = "button";
+      btn.setAttribute("role", "menuitem");
+      btn.addEventListener("click", () => {
+        hideMessageMenu();
+        item.run();
+      });
+      li.append(btn);
+      messageMenuActions.append(li);
+    }
+
+    messageMenuHandle.classList.toggle("hidden", !asSheet);
+    messageMenuBackdrop.className = asSheet
+      ? "absolute inset-0 bg-black/60"
+      : "absolute inset-0 bg-transparent";
+
+    if (asSheet) {
+      messageMenu.className =
+        "msg-menu-sheet absolute inset-x-0 bottom-0 z-10 rounded-t-3xl bg-card px-4 pb-8 pt-3 shadow-2xl ring-1 ring-border/80";
+      messageMenu.style.paddingBottom = "max(1.5rem, env(safe-area-inset-bottom))";
+      messageMenu.style.left = "";
+      messageMenu.style.top = "";
+    } else {
+      messageMenu.className =
+        "msg-menu-float absolute z-10 w-72 rounded-2xl bg-card p-3 shadow-2xl ring-1 ring-border/80";
+      messageMenu.style.paddingBottom = "";
+    }
+
+    setOverlay(messageMenuOverlay, true);
+    ignoreMenuClickUntil = Date.now() + 450;
+
+    if (!asSheet) {
+      const left = Number(x) || 16;
+      const top = Number(y) || 16;
+      messageMenu.style.left = `${left}px`;
+      messageMenu.style.top = `${top}px`;
+      requestAnimationFrame(() => {
+        const rect = messageMenu.getBoundingClientRect();
+        let nextLeft = left;
+        let nextTop = top;
+        const margin = 8;
+        if (nextLeft + rect.width > window.innerWidth - margin) {
+          nextLeft = window.innerWidth - rect.width - margin;
+        }
+        if (nextTop + rect.height > window.innerHeight - margin) {
+          nextTop = window.innerHeight - rect.height - margin;
+        }
+        if (nextLeft < margin) nextLeft = margin;
+        if (nextTop < margin) nextTop = margin;
+        messageMenu.style.left = `${nextLeft}px`;
+        messageMenu.style.top = `${nextTop}px`;
+      });
+    }
+
+    const focusable = messageMenu.querySelector("button:not([disabled])");
+    if (focusable) focusable.focus();
+  }
+
+  function bindMessageMenu(row, message, bubble) {
+    if (message.deleted) return;
+
+    const moreBtn = el(
+      "button",
+      `absolute top-1 hidden h-11 w-11 items-center justify-center rounded-full text-lg leading-none text-muted-foreground hover:bg-zinc-950 hover:text-foreground md:inline-flex md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100 ${
+        currentUser && message.userId === currentUser.id ? "left-1" : "right-1"
+      }`
+    );
+    moreBtn.type = "button";
+    moreBtn.setAttribute("aria-haspopup", "menu");
+    moreBtn.setAttribute("aria-label", "Nachrichtenaktionen");
+    moreBtn.textContent = "⋮";
+    moreBtn.addEventListener("pointerdown", (event) => event.stopPropagation());
+    moreBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const rect = moreBtn.getBoundingClientRect();
+      openMessageMenu(message, rect.left, rect.bottom + 4);
+    });
+    bubble.classList.add("relative");
+    bubble.append(moreBtn);
+
+    row.addEventListener("contextmenu", (event) => {
+      if (isMessageChrome(event.target)) return;
+      event.preventDefault();
+      openMessageMenu(message, event.clientX, event.clientY);
+    });
+
+    let pressTimer = 0;
+    let startX = 0;
+    let startY = 0;
+    let pressing = false;
+    let longPressArmed = false;
+
+    const clearPress = () => {
+      window.clearTimeout(pressTimer);
+      pressTimer = 0;
+      pressing = false;
+      row.classList.remove("msg-press");
+    };
+
+    row.addEventListener("pointerdown", (event) => {
+      if (event.pointerType === "mouse") return;
+      if (isMessageChrome(event.target)) return;
+      startX = event.clientX;
+      startY = event.clientY;
+      pressing = true;
+      longPressArmed = false;
+      pressTimer = window.setTimeout(() => {
+        pressTimer = 0;
+        if (!pressing) return;
+        longPressArmed = true;
+        row.classList.add("msg-press");
+        if (typeof navigator.vibrate === "function") navigator.vibrate(12);
+        window.getSelection()?.removeAllRanges();
+      }, 480);
+    });
+
+    row.addEventListener("pointermove", (event) => {
+      if (!pressing || (!pressTimer && !longPressArmed)) return;
+      const dx = event.clientX - startX;
+      const dy = event.clientY - startY;
+      if (dx * dx + dy * dy > 144) {
+        longPressArmed = false;
+        clearPress();
+      }
+    });
+
+    row.addEventListener("pointerup", (event) => {
+      const armed = longPressArmed;
+      clearPress();
+      longPressArmed = false;
+      if (!armed) return;
+      event.preventDefault();
+      openMessageMenu(message, startX, startY);
+    });
+    row.addEventListener("pointercancel", () => {
+      longPressArmed = false;
+      clearPress();
+    });
   }
 
   function applyReactions(row, message) {
     let host = row.querySelector("[data-reactions]");
+    const list = message.reactions || [];
+    if (!list.length) {
+      if (host) host.remove();
+      return;
+    }
     if (!host) {
       host = el("div", "mt-2 flex flex-wrap gap-1");
       host.setAttribute("data-reactions", "");
@@ -874,11 +1097,11 @@
       if (bubble) bubble.append(host);
     }
     host.replaceChildren();
-    for (const reaction of message.reactions || []) {
+    for (const reaction of list) {
       const btn = el(
         "button",
         `inline-flex h-11 min-h-11 items-center gap-1 rounded-full px-3 text-sm ${
-          reaction.mine ? "bg-amber-500/20 ring-1 ring-amber-500/40" : "bg-zinc-800 ring-1 ring-border"
+          reaction.mine ? "bg-amber-500/20 text-foreground" : "bg-muted text-foreground"
         }`
       );
       btn.type = "button";
@@ -900,7 +1123,7 @@
 
   function buildMessageRow(message) {
     const mine = currentUser && message.userId === currentUser.id;
-    const row = el("article", `relative flex gap-2 ${mine ? "justify-end" : "justify-start"}`);
+    const row = el("article", `group relative flex gap-2 ${mine ? "justify-end" : "justify-start"}`);
     row.setAttribute("data-message-id", String(message.id ?? ""));
 
     const avatar = el("div", "");
@@ -1049,55 +1272,7 @@
     col.append(bubble);
 
     if (!message.deleted) {
-      const actions = el("div", "mt-1 flex flex-wrap gap-1");
-      const replyBtn = el(
-        "button",
-        "inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-xs font-medium text-muted-foreground ring-1 ring-border hover:bg-muted hover:text-foreground",
-        "Antworten"
-      );
-      replyBtn.type = "button";
-      replyBtn.addEventListener("click", () => setReplyTarget(message));
-      const reactBtn = el(
-        "button",
-        "inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-xs font-medium text-muted-foreground ring-1 ring-border hover:bg-muted hover:text-foreground",
-        "Reagieren"
-      );
-      reactBtn.type = "button";
-      reactBtn.addEventListener("click", (event) => {
-        event.stopPropagation();
-        if (reactionPicker && reactionPicker.parentElement === row) hideReactionPicker();
-        else showReactionPicker(reactBtn, message);
-      });
-      actions.append(replyBtn, reactBtn);
-      if (mine && (message.type || "text") === "text") {
-        const editBtn = el(
-          "button",
-          "inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-xs font-medium text-muted-foreground ring-1 ring-border hover:bg-muted hover:text-foreground",
-          "Bearbeiten"
-        );
-        editBtn.type = "button";
-        editBtn.addEventListener("click", () => startEdit(message));
-        actions.append(editBtn);
-      }
-      const fwdBtn = el(
-        "button",
-        "inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-xs font-medium text-muted-foreground ring-1 ring-border hover:bg-muted hover:text-foreground",
-        "Weiterleiten"
-      );
-      fwdBtn.type = "button";
-      fwdBtn.addEventListener("click", () => openForward(message.id));
-      actions.append(fwdBtn);
-      if (mine) {
-        const delBtn = el(
-          "button",
-          "inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-xs font-medium text-red-200 ring-1 ring-red-900 hover:bg-red-950/60",
-          "Löschen"
-        );
-        delBtn.type = "button";
-        delBtn.addEventListener("click", () => deleteMessage(message.id));
-        actions.append(delBtn);
-      }
-      col.append(actions);
+      bindMessageMenu(row, message, bubble);
       const receipt = el("p", "mt-1 text-xs text-muted-foreground", "");
       receipt.setAttribute("data-receipt", "");
       receipt.textContent = receiptLabel(message);
@@ -1231,6 +1406,7 @@
     seenMessageIds.clear();
     messagesById.clear();
     hideReactionPicker();
+    hideMessageMenu();
     renderTyping([]);
 
     if (!messages.length) {
@@ -1371,6 +1547,7 @@
     setReplyTarget(null);
     clearEdit();
     hideReactionPicker();
+    hideMessageMenu();
     activeConversationId = conversationId;
     updateRoomHeader();
     renderConversationLists();
@@ -1742,6 +1919,7 @@
   async function handleSend(event) {
     event.preventDefault();
     showError(chatError, "");
+    setAttachTray(false);
     if (!canPost()) {
       showError(chatError, "Dein Konto wartet noch auf Freigabe durch einen Admin.");
       return;
@@ -1907,6 +2085,7 @@
 
   async function startRecording() {
     showError(chatError, "");
+    setAttachTray(false);
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
       showError(chatError, "Sprachnachrichten werden von diesem Browser nicht unterstützt.");
       return;
@@ -2119,11 +2298,22 @@
   btnProfileClose.addEventListener("click", () => setProfilePanel(false));
   profileBackdrop.addEventListener("click", () => setProfilePanel(false));
   formProfile.addEventListener("submit", handleProfileSubmit);
-  btnAttachImage.addEventListener("click", () => inputImage.click());
+  btnAttach.addEventListener("click", () => setAttachTray(attachTray.hidden));
+  messageList.addEventListener("click", () => setAttachTray(false));
+  btnAttachImage.addEventListener("click", () => {
+    setAttachTray(false);
+    inputImage.click();
+  });
   inputImage.addEventListener("change", handleImagePicked);
-  btnAttachFile.addEventListener("click", () => inputFile.click());
+  btnAttachFile.addEventListener("click", () => {
+    setAttachTray(false);
+    inputFile.click();
+  });
   inputFile.addEventListener("change", handleFilePicked);
-  btnAttachLocation.addEventListener("click", handleLocation);
+  btnAttachLocation.addEventListener("click", () => {
+    setAttachTray(false);
+    handleLocation();
+  });
   btnAttachVoice.addEventListener("click", startRecording);
   btnRecordCancel.addEventListener("click", () => stopRecording(false));
   btnRecordSend.addEventListener("click", () => stopRecording(true));
@@ -2197,6 +2387,10 @@
   btnAssistantMobile.addEventListener("click", openAssistant);
   btnForwardClose.addEventListener("click", () => setForwardPanel(false));
   forwardBackdrop.addEventListener("click", () => setForwardPanel(false));
+  messageMenuBackdrop.addEventListener("click", () => {
+    if (Date.now() < ignoreMenuClickUntil) return;
+    hideMessageMenu();
+  });
   messageInput.addEventListener("input", () => {
     if (messageInput.value.trim()) scheduleTyping();
     else if (typingSent) emitTyping(false);
@@ -2210,11 +2404,17 @@
     msgSearchTimer = window.setTimeout(runMessageSearch, 280);
   });
   searchCurrentOnly.addEventListener("change", runMessageSearch);
-  document.addEventListener("click", (event) => {
-    if (reactionPicker && !reactionPicker.contains(event.target)) {
-      hideReactionPicker();
-    }
-  });
+  document.addEventListener(
+    "click",
+    (event) => {
+      if (Date.now() < ignoreMenuClickUntil) {
+        if (messageMenu.contains(event.target)) return;
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    },
+    true
+  );
 
   formSearchDesktop.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -2238,12 +2438,14 @@
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
     if (reactionPicker) hideReactionPicker();
+    else if (messageMenuOverlay && !messageMenuOverlay.hidden) hideMessageMenu();
     else if (!forwardOverlay.hidden) setForwardPanel(false);
     else if (!searchOverlay.hidden) setSearchPanel(false);
     else if (!chatMenuOverlay.hidden) setChatMenu(false);
     else if (!profileOverlay.hidden) setProfilePanel(false);
     else if (!onlineOverlay.hidden) setOnlinePanel(false);
     else if (!navOverlay.hidden) setNavPanel(false);
+    else if (attachTray && !attachTray.hidden) setAttachTray(false);
     else if (replyTarget) setReplyTarget(null);
     else if (mediaRecorder) stopRecording(false);
   });
