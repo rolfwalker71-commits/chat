@@ -10,6 +10,7 @@
  *   - PostgreSQL speichert Benutzer, Unterhaltungen, Nachrichten und Upload-Metadaten.
  *   - Dateien (Bilder, Sprache, Avatar) liegen im Docker-Volume `uploads/`,
  *     Abruf nur über authentifiziertes /api/files/:id (kein öffentliches Static).
+ *     Push-Bilder: kurzlebige HMAC-URL /api/notify-media/:id (ohne Cookie).
  *   - JWT in einem httpOnly-Cookie hält die Session (kein Token im localStorage).
  *
  * Räume:
@@ -197,6 +198,99 @@ function isValidUsername(username) {
 
 function isValidPassword(password) {
   return typeof password === "string" && password.length >= MIN_PASSWORD_LENGTH && password.length <= 128;
+}
+
+const RESET_CODE_TTL_MS = 30 * 60 * 1000;
+const NOTIFY_MEDIA_TTL_SEC = 24 * 60 * 60;
+
+function hmacHexEqual(a, b) {
+  const aa = Buffer.from(String(a || ""), "utf8");
+  const bb = Buffer.from(String(b || ""), "utf8");
+  if (!aa.length || aa.length !== bb.length) return false;
+  return crypto.timingSafeEqual(aa, bb);
+}
+
+function normalizeResetCode(code) {
+  return String(code || "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
+}
+
+function hashResetCode(code) {
+  return crypto.createHmac("sha256", JWT_SECRET).update(`reset:${normalizeResetCode(code)}`).digest("hex");
+}
+
+function generateResetCode() {
+  const raw = crypto.randomBytes(4).toString("hex").toUpperCase();
+  return `${raw.slice(0, 4)}-${raw.slice(4)}`;
+}
+
+function notifyMediaSignature(id, exp) {
+  return crypto.createHmac("sha256", JWT_SECRET).update(`notify-media:${id}:${exp}`).digest("hex");
+}
+
+function notifyMediaUrl(id) {
+  const exp = Math.floor(Date.now() / 1000) + NOTIFY_MEDIA_TTL_SEC;
+  const sig = notifyMediaSignature(id, exp);
+  return `/api/notify-media/${encodeURIComponent(id)}?exp=${exp}&sig=${sig}`;
+}
+
+function extractMentionUsernames(text) {
+  if (!text) return [];
+  const names = new Set();
+  const re = /(^|[^a-zA-Z0-9_])@([a-zA-Z0-9_]{3,32})\b/g;
+  let match;
+  while ((match = re.exec(String(text)))) {
+    names.add(match[2].toLowerCase());
+  }
+  return [...names];
+}
+
+function mapMentions(raw) {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set();
+  const mentions = [];
+  for (const item of raw) {
+    const id = Number(item?.id);
+    const username = String(item?.username || "")
+      .toLowerCase()
+      .slice(0, MAX_USERNAME_LENGTH);
+    if (!Number.isInteger(id) || id <= 0 || !isValidUsername(username) || seen.has(id)) continue;
+    seen.add(id);
+    mentions.push({ id, username });
+  }
+  return mentions;
+}
+
+async function resolveMentions(text, conversationId, senderId) {
+  const usernames = extractMentionUsernames(text);
+  if (!usernames.length) return [];
+
+  let rows;
+  if (conversationId) {
+    const result = await pool.query(
+      `
+      SELECT u.id, u.username
+      FROM conversation_members cm
+      JOIN users u ON u.id = cm.user_id
+      WHERE cm.conversation_id = $1 AND LOWER(u.username) = ANY($2::text[])
+      `,
+      [conversationId, usernames]
+    );
+    rows = result.rows;
+  } else {
+    const result = await pool.query(
+      `SELECT id, username FROM users WHERE LOWER(username) = ANY($1::text[])`,
+      [usernames]
+    );
+    rows = result.rows;
+  }
+
+  return mapMentions(
+    rows
+      .filter((row) => row.id !== senderId)
+      .map((row) => ({ id: row.id, username: row.username }))
+  );
 }
 
 function signToken(user) {
@@ -529,6 +623,7 @@ function mapMessage(row) {
     poll: null,
     linkPreview: null,
     trip: null,
+    mentions: deleted ? [] : mapMentions(row.mentions),
   };
 
   if (row.reply_to_id) {
@@ -586,7 +681,7 @@ function mapMessage(row) {
 const MESSAGE_SELECT = `
   m.id, m.user_id, m.content, m.created_at, m.conversation_id,
   m.message_type, m.upload_id, m.location_lat, m.location_lng, m.location_accuracy,
-  m.reply_to_id, m.deleted_at, m.transcript, m.edited_at, m.link_preview, m.trip,
+  m.reply_to_id, m.deleted_at, m.transcript, m.edited_at, m.link_preview, m.trip, m.mentions,
   u.username, u.real_name, u.avatar_url,
   up.mime AS upload_mime, up.duration_ms, up.original_name AS upload_name,
   r.message_type AS reply_type, r.content AS reply_content, r.deleted_at AS reply_deleted_at,
@@ -1639,6 +1734,20 @@ async function initDatabase() {
   await pool.query(`ALTER TABLE conversation_members ADD COLUMN IF NOT EXISTS muted_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS global_muted_at TIMESTAMPTZ`);
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS password_resets (
+      id         SERIAL PRIMARY KEY,
+      user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token_hash TEXT NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      used_at    TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_password_resets_user
+      ON password_resets (user_id, created_at DESC);
+  `);
+  await pool.query(`
     UPDATE conversations c
     SET admin_user_id = sub.user_id
     FROM (
@@ -1697,6 +1806,7 @@ async function initDatabase() {
   await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS link_preview JSONB`);
   await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS trip JSONB`);
+  await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS mentions JSONB`);
 
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_messages_created_at
@@ -1851,7 +1961,11 @@ function pushPreview(message) {
   if (!message) return "Neue Nachricht";
   if (message.deleted) return "Nachricht gelöscht";
   const type = message.type || "text";
-  if (type === "image") return "Bild";
+  if (type === "image") {
+    const caption = String(message.content || "").trim();
+    if (caption && caption !== "Bild") return caption.slice(0, 140);
+    return "Bild";
+  }
   if (type === "voice") return "Sprachnachricht";
   if (type === "location") return "Standort";
   if (type === "file") return message.file?.name || "Datei";
@@ -1899,24 +2013,31 @@ async function sendPushToUser(userId, payload) {
 }
 
 async function notifyPushForMessage(message, conversationId, senderId) {
-  if (!vapidKeys || !message || !conversationId) return;
+  if (!vapidKeys || !message || message.deleted) return;
+  const mentionedIds = new Set(
+    (message.mentions || []).map((item) => Number(item.id)).filter((id) => id && id !== senderId)
+  );
+  if (!conversationId && mentionedIds.size === 0) return;
   const payload = {
     title: displayName(message) || "MyChat",
     body: pushPreview(message),
     tag: `chat-${conversationId || "global"}`,
     conversationId: conversationId ?? null,
-    icon: "/icons/icon-192.png",
-    badge: "/icons/icon-192.png",
+    icon: "/icons/pwa-192.png",
+    badge: "/icons/pwa-192.png",
   };
+  if (message.type === "image" && message.file?.id && IMAGE_MIMES.has(message.file.mime)) {
+    payload.image = notifyMediaUrl(message.file.id);
+  }
 
-  let userIds = [];
+  let recipients = [];
   if (conversationId) {
     const { rows } = await pool.query(
       `
-      SELECT DISTINCT ps.user_id
+      SELECT DISTINCT ps.user_id, cm.muted_at
       FROM push_subscriptions ps
       JOIN conversation_members cm ON cm.user_id = ps.user_id
-      WHERE cm.conversation_id = $1 AND ps.user_id <> $2 AND cm.muted_at IS NULL
+      WHERE cm.conversation_id = $1 AND ps.user_id <> $2
         AND NOT EXISTS (
           SELECT 1 FROM user_blocks b
           WHERE (b.blocker_id = ps.user_id AND b.blocked_id = $2)
@@ -1925,23 +2046,31 @@ async function notifyPushForMessage(message, conversationId, senderId) {
       `,
       [conversationId, senderId]
     );
-    userIds = rows.map((row) => row.user_id);
+    recipients = rows.filter((row) => !row.muted_at || mentionedIds.has(row.user_id));
   } else {
     const { rows } = await pool.query(
       `
-      SELECT DISTINCT ps.user_id
+      SELECT DISTINCT ps.user_id, u.global_muted_at
       FROM push_subscriptions ps
       JOIN users u ON u.id = ps.user_id
-      WHERE ps.user_id <> $1 AND u.global_muted_at IS NULL
+      WHERE ps.user_id <> $1
       `,
       [senderId]
     );
-    userIds = rows.map((row) => row.user_id);
+    recipients = rows.filter((row) => !row.global_muted_at || mentionedIds.has(row.user_id));
   }
 
-  for (const userId of userIds) {
-    if (isUserViewing(userId, conversationId)) continue;
-    sendPushToUser(userId, payload).catch((err) => {
+  for (const row of recipients) {
+    if (isUserViewing(row.user_id, conversationId)) continue;
+    const mentioned = mentionedIds.has(row.user_id);
+    const userPayload = mentioned
+      ? {
+          ...payload,
+          title: `${displayName(message)} hat dich erwähnt`,
+          tag: `${payload.tag}-mention`,
+        }
+      : payload;
+    sendPushToUser(row.user_id, userPayload).catch((err) => {
       console.error("Push an Nutzer fehlgeschlagen:", err.message);
     });
   }
@@ -2022,6 +2151,10 @@ app.use(
       }
       if (filePath.endsWith(".webmanifest")) {
         res.setHeader("Content-Type", "application/manifest+json; charset=utf-8");
+        res.setHeader("Cache-Control", "no-cache");
+      }
+      if (filePath.includes(`${path.sep}icons${path.sep}`)) {
+        res.setHeader("Cache-Control", "no-cache");
       }
     },
   })
@@ -2041,6 +2174,14 @@ const uploadLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Zu viele Uploads. Bitte später erneut versuchen." },
+});
+
+const notifyMediaLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Zu viele Anfragen." },
 });
 
 const memoryUpload = multer({
@@ -2203,6 +2344,85 @@ app.patch("/api/me", requireAuth, async (req, res) => {
   } catch (err) {
     console.error("Profil speichern fehlgeschlagen:", err);
     return sendError(res, 500, "Profil konnte nicht gespeichert werden.");
+  }
+});
+
+app.post("/api/me/password", requireAuth, async (req, res) => {
+  try {
+    const currentPassword = req.body?.currentPassword;
+    const newPassword = req.body?.newPassword;
+    if (!isValidPassword(newPassword)) {
+      return sendError(res, 400, `Neues Passwort muss mindestens ${MIN_PASSWORD_LENGTH} Zeichen haben.`);
+    }
+    if (typeof currentPassword === "string" && currentPassword === newPassword) {
+      return sendError(res, 400, "Neues Passwort muss sich vom aktuellen unterscheiden.");
+    }
+
+    const { rows } = await pool.query(`SELECT password_hash FROM users WHERE id = $1`, [req.user.id]);
+    if (!rows[0]) return sendError(res, 401, "Nicht angemeldet.");
+    const ok = await bcrypt.compare(String(currentPassword || ""), rows[0].password_hash);
+    if (!ok) return sendError(res, 400, "Aktuelles Passwort ist falsch.");
+
+    const passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
+    await pool.query(`UPDATE users SET password_hash = $1 WHERE id = $2`, [passwordHash, req.user.id]);
+    await pool.query(
+      `UPDATE password_resets SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL`,
+      [req.user.id]
+    );
+    log(`Passwort geändert: ${req.user.username}`);
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("Passwort ändern fehlgeschlagen:", err);
+    return sendError(res, 500, "Passwort konnte nicht geändert werden.");
+  }
+});
+
+app.post("/api/password/reset", authLimiter, async (req, res) => {
+  try {
+    const username = sanitizeText(req.body?.username || "").toLowerCase();
+    const code = String(req.body?.code || "");
+    const newPassword = req.body?.newPassword;
+    if (!isValidUsername(username) || !isValidPassword(newPassword) || normalizeResetCode(code).length < 8) {
+      return sendError(res, 400, "Code ungültig oder abgelaufen.");
+    }
+
+    const { rows: userRows } = await pool.query(
+      `SELECT id, username, real_name, avatar_url, is_bot, is_admin, is_approved, last_seen_at
+       FROM users WHERE username = $1 AND is_bot = FALSE`,
+      [username]
+    );
+    const userRow = userRows[0];
+    if (!userRow) return sendError(res, 400, "Code ungültig oder abgelaufen.");
+
+    const { rows: resetRows } = await pool.query(
+      `
+      SELECT id, token_hash FROM password_resets
+      WHERE user_id = $1 AND used_at IS NULL AND expires_at > NOW()
+      ORDER BY created_at DESC
+      LIMIT 5
+      `,
+      [userRow.id]
+    );
+    const match = resetRows.find((row) => hmacHexEqual(row.token_hash, hashResetCode(code)));
+    if (!match) return sendError(res, 400, "Code ungültig oder abgelaufen.");
+
+    const passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
+    await pool.query(`UPDATE users SET password_hash = $1 WHERE id = $2`, [passwordHash, userRow.id]);
+    await pool.query(
+      `UPDATE password_resets SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL`,
+      [userRow.id]
+    );
+
+    const user = toPublicUser(userRow, { includeAdmin: true });
+    if (user.isAdmin) {
+      user.pendingUsers = await countPendingUsers();
+    }
+    res.cookie(COOKIE_NAME, signToken(user), cookieOptions());
+    log(`Passwort zurückgesetzt: ${user.username}`);
+    return res.json(user);
+  } catch (err) {
+    console.error("Passwort-Reset fehlgeschlagen:", err);
+    return sendError(res, 500, "Passwort konnte nicht gesetzt werden.");
   }
 });
 
@@ -2395,6 +2615,47 @@ app.post("/api/admin/users/:id/revoke", requireAuth, requireAdmin, async (req, r
   } catch (err) {
     console.error("Sperre fehlgeschlagen:", err);
     return sendError(res, 500, "Benutzer konnte nicht gesperrt werden.");
+  }
+});
+
+app.post("/api/admin/users/:id/reset-code", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const targetId = parsePositiveInt(req.params.id);
+    if (!targetId) return sendError(res, 400, "Ungültiger Benutzer.");
+
+    const { rows } = await pool.query(
+      `SELECT id, username, is_bot FROM users WHERE id = $1`,
+      [targetId]
+    );
+    const target = rows[0];
+    if (!target) return sendError(res, 404, "Benutzer nicht gefunden.");
+    if (target.is_bot) return sendError(res, 400, "Für diesen Account kann kein Code erzeugt werden.");
+
+    const code = generateResetCode();
+    const tokenHash = hashResetCode(code);
+    const expiresAt = new Date(Date.now() + RESET_CODE_TTL_MS);
+
+    await pool.query(
+      `UPDATE password_resets SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL`,
+      [targetId]
+    );
+    await pool.query(
+      `
+      INSERT INTO password_resets (user_id, token_hash, expires_at)
+      VALUES ($1, $2, $3)
+      `,
+      [targetId, tokenHash, expiresAt]
+    );
+
+    log(`Admin ${req.user.username} hat einen Reset-Code für ${target.username} erzeugt.`);
+    return res.json({
+      username: target.username,
+      code,
+      expiresAt: expiresAt.toISOString(),
+    });
+  } catch (err) {
+    console.error("Reset-Code fehlgeschlagen:", err);
+    return sendError(res, 500, "Reset-Code konnte nicht erzeugt werden.");
   }
 });
 
@@ -3289,6 +3550,45 @@ app.post("/api/conversations/:id/avatar", requireAuth, requireApproved, uploadLi
   }
 });
 
+app.get("/api/notify-media/:id", notifyMediaLimiter, async (req, res) => {
+  try {
+    const id = String(req.params.id || "");
+    if (!/^[0-9a-f-]{36}$/i.test(id)) {
+      return sendError(res, 400, "Ungültige Datei.");
+    }
+    const exp = Number(req.query.exp);
+    const sig = String(req.query.sig || "");
+    if (!Number.isFinite(exp) || !/^[a-f0-9]{64}$/i.test(sig)) {
+      return sendError(res, 403, "Ungültiger Link.");
+    }
+    const now = Math.floor(Date.now() / 1000);
+    if (exp < now || exp > now + NOTIFY_MEDIA_TTL_SEC + 60) {
+      return sendError(res, 403, "Link abgelaufen.");
+    }
+    if (!hmacHexEqual(sig.toLowerCase(), notifyMediaSignature(id, exp))) {
+      return sendError(res, 403, "Ungültiger Link.");
+    }
+
+    const { rows } = await pool.query(`SELECT * FROM uploads WHERE id = $1`, [id]);
+    const upload = rows[0];
+    if (!upload || !IMAGE_MIMES.has(upload.mime)) {
+      return sendError(res, 404, "Datei nicht gefunden.");
+    }
+
+    const abs = safeUploadPath(upload.storage_name);
+    if (!abs) return sendError(res, 400, "Ungültige Datei.");
+
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Content-Type", upload.mime);
+    res.setHeader("Cache-Control", "private, max-age=3600");
+    res.setHeader("Content-Disposition", "inline");
+    return res.sendFile(abs);
+  } catch (err) {
+    console.error("Push-Bild fehlgeschlagen:", err);
+    return sendError(res, 500, "Datei konnte nicht geladen werden.");
+  }
+});
+
 app.get("/api/files/:id", requireAuth, async (req, res) => {
   try {
     const id = String(req.params.id || "");
@@ -3540,13 +3840,14 @@ async function insertAndBroadcastMessage({
   poll,
   trip,
 }) {
+  const mentions = await resolveMentions(content || "", conversationId, user.id);
   const { rows } = await pool.query(
     `
     INSERT INTO messages (
       user_id, content, conversation_id, message_type, upload_id,
-      location_lat, location_lng, location_accuracy, reply_to_id, transcript, trip
+      location_lat, location_lng, location_accuracy, reply_to_id, transcript, trip, mentions
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
     RETURNING id
     `,
     [
@@ -3561,6 +3862,7 @@ async function insertAndBroadcastMessage({
       replyToId,
       transcript ? sanitizeText(String(transcript)).slice(0, 2000) : null,
       trip || null,
+      mentions.length ? JSON.stringify(mentions) : null,
     ]
   );
 
@@ -3650,7 +3952,9 @@ async function maybeReplyAsBot(userMessage, conversationId, fromUser) {
   if (userMessage.type !== "text") return;
 
   const text = userMessage.content || "";
-  const mentioned = /(?:^|\s)@raum\b|^\/(help|hilfe)\b/i.test(text);
+  const mentioned =
+    (userMessage.mentions || []).some((item) => String(item.username || "").toLowerCase() === "raum") ||
+    /(?:^|\s)@raum\b|^\/(help|hilfe)\b/i.test(text);
   let talk = false;
   if (conversationId) {
     const members = await loadConversationMembers(conversationId);
@@ -4279,8 +4583,10 @@ io.on("connection", async (socket) => {
         respond({ ok: false, error: "Bearbeiten nur innerhalb von 24 Stunden." });
         return;
       }
-      await pool.query(`UPDATE messages SET content = $1, edited_at = NOW() WHERE id = $2`, [
+      const mentions = await resolveMentions(content, row.conversation_id, userId);
+      await pool.query(`UPDATE messages SET content = $1, edited_at = NOW(), mentions = $2 WHERE id = $3`, [
         content,
+        mentions.length ? JSON.stringify(mentions) : null,
         messageId,
       ]);
       const message = await loadPublicMessage(messageId, userId);

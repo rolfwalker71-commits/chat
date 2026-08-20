@@ -1,5 +1,5 @@
 /* global self, caches, fetch, clients */
-const CACHE = "mychat-shell-v27";
+const CACHE = "mychat-shell-v30";
 const PRECACHE = [
   "/",
   "/index.html",
@@ -7,19 +7,28 @@ const PRECACHE = [
   "/manifest.webmanifest",
   "/icons/logo.png",
   "/icons/logo.svg",
-  "/icons/icon-192.png",
-  "/icons/icon-512.png",
-  "/icons/maskable-512.png",
-  "/icons/apple-touch-icon.png",
-  "/icons/favicon.png",
+  "/icons/pwa-192.png",
+  "/icons/pwa-512.png",
+  "/icons/pwa-maskable.png",
+  "/icons/apple-touch.png",
+  "/icons/favicon-32.png",
 ];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches
-      .open(CACHE)
-      .then((cache) => cache.addAll(PRECACHE))
-      .then(() => self.skipWaiting())
+    (async () => {
+      const cache = await caches.open(CACHE);
+      await Promise.all(
+        PRECACHE.map(async (path) => {
+          const url = new URL(path, self.location.origin);
+          url.searchParams.set("sw", CACHE);
+          const response = await fetch(url, { cache: "reload" });
+          if (!response.ok) throw new Error(`Precache fehlgeschlagen: ${path}`);
+          await cache.put(path, response);
+        })
+      );
+      await self.skipWaiting();
+    })()
   );
 });
 
@@ -42,6 +51,7 @@ self.addEventListener("fetch", (event) => {
   const networkFirst =
     event.request.mode === "navigate" ||
     url.pathname === "/" ||
+    url.pathname.startsWith("/icons/") ||
     url.pathname.endsWith(".html") ||
     url.pathname.endsWith(".js") ||
     url.pathname.endsWith(".webmanifest");
@@ -100,8 +110,9 @@ async function handlePush(event) {
 
   await self.registration.showNotification(data.title || "MyChat", {
     body: data.body || "Neue Nachricht",
-    icon: data.icon || "/icons/icon-192.png",
-    badge: data.badge || "/icons/icon-192.png",
+    icon: data.icon || "/icons/pwa-192.png",
+    badge: data.badge || "/icons/pwa-192.png",
+    image: data.image || undefined,
     tag: data.tag || "mychat",
     renotify: true,
     data: { conversationId },

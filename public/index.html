@@ -48,9 +48,9 @@
     </script>
 
     <link rel="manifest" href="/manifest.webmanifest" />
-    <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon.png" />
-    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
-    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/pwa-192.png" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch.png" />
 
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -414,6 +414,31 @@
       #btn-attach[aria-expanded="true"] {
         transform: rotate(45deg);
       }
+
+      @keyframes ptr-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      .ptr-bar {
+        display: flex;
+        height: 0;
+        flex-shrink: 0;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+      }
+      .ptr-spinner {
+        width: 1.25rem;
+        height: 1.25rem;
+        border: 2px solid rgb(var(--border));
+        border-top-color: rgb(var(--primary));
+        border-radius: 999px;
+      }
+      .ptr-bar.is-armed .ptr-spinner,
+      .ptr-bar.is-busy .ptr-spinner {
+        animation: ptr-spin 0.7s linear infinite;
+      }
     </style>
   </head>
   <body class="h-full min-h-0 overflow-hidden bg-background font-sans antialiased">
@@ -504,8 +529,26 @@
               </p>
             </div>
 
+            <div id="wrap-reset-code" class="hidden flex-col gap-2">
+              <label for="reset-code" class="text-sm font-medium text-foreground">Reset-Code</label>
+              <input
+                id="reset-code"
+                name="resetCode"
+                type="text"
+                autocomplete="one-time-code"
+                autocapitalize="characters"
+                spellcheck="false"
+                maxlength="16"
+                class="h-12 w-full rounded-xl bg-input px-4 text-base uppercase tracking-widest text-foreground ring-1 ring-border placeholder:text-muted-foreground"
+                placeholder="ABCD-EFGH"
+              />
+              <p class="text-xs leading-snug text-muted-foreground">
+                Den Code bekommst du von einem Admin. Er gilt 30 Minuten und nur einmal.
+              </p>
+            </div>
+
             <div class="flex flex-col gap-2">
-              <label for="password" class="text-sm font-medium text-foreground">Passwort</label>
+              <label for="password" id="label-password" class="text-sm font-medium text-foreground">Passwort</label>
               <input
                 id="password"
                 name="password"
@@ -547,6 +590,20 @@
               class="mt-1 inline-flex h-12 min-h-11 w-full items-center justify-center rounded-xl bg-primary px-4 text-base font-semibold text-primary-foreground hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
             >
               Anmelden
+            </button>
+            <button
+              type="button"
+              id="auth-forgot"
+              class="inline-flex h-11 min-h-11 w-full items-center justify-center rounded-xl px-3 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              Passwort vergessen
+            </button>
+            <button
+              type="button"
+              id="auth-reset-back"
+              class="hidden h-11 min-h-11 w-full items-center justify-center rounded-xl px-3 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              Zurück zur Anmeldung
             </button>
           </form>
         </section>
@@ -820,7 +877,6 @@
                 id="attach-tray"
                 class="mb-3 hidden grid grid-cols-4 gap-2"
                 hidden
-                role="menu"
                 aria-label="Anhang"
               >
                 <button type="button" id="btn-attach-image" role="menuitem" class="flex h-auto min-h-0 flex-col items-center gap-1 rounded-2xl px-1 py-2 text-foreground hover:bg-muted">
@@ -870,7 +926,7 @@
                   </span>
                   <span class="text-xs font-medium leading-snug">Video</span>
                 </button>
-                <button type="button" id="btn-attach-enroute" role="menuitem" class="flex h-auto min-h-0 flex-col items-center gap-1 rounded-2xl px-1 py-2 text-foreground hover:bg-muted">
+                <button type="button" id="btn-attach-enroute" class="flex h-auto min-h-0 flex-col items-center gap-1 rounded-2xl px-1 py-2 text-foreground hover:bg-muted">
                   <span class="inline-flex h-11 min-h-11 w-11 items-center justify-center rounded-full bg-muted text-primary" aria-hidden="true">
                     <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                       <path d="M3 11l19-9-9 19-2-8-8-2Z" />
@@ -904,17 +960,25 @@
                     <path d="M5 12h14" />
                   </svg>
                 </button>
-                <label for="message-input" class="sr-only">Nachricht</label>
-                <input
-                  id="message-input"
-                  name="message"
-                  type="text"
-                  maxlength="1000"
-                  autocomplete="off"
-                  enterkeyhint="send"
-                  placeholder="Nachricht"
-                  class="h-12 min-h-11 flex-1 rounded-full bg-input px-4 text-base text-foreground ring-1 ring-border placeholder:text-muted-foreground"
-                />
+                <div class="relative min-w-0 flex-1">
+                  <ul
+                    id="mention-suggest"
+                    class="absolute bottom-full left-0 right-0 z-20 mb-2 hidden max-h-48 overflow-y-auto rounded-2xl bg-card p-1.5 shadow-lg shadow-black/10 ring-1 ring-border"
+                    role="listbox"
+                    hidden
+                  ></ul>
+                  <label for="message-input" class="sr-only">Nachricht</label>
+                  <input
+                    id="message-input"
+                    name="message"
+                    type="text"
+                    maxlength="1000"
+                    autocomplete="off"
+                    enterkeyhint="send"
+                    placeholder="Nachricht"
+                    class="h-12 min-h-11 w-full rounded-full bg-input px-4 text-base text-foreground ring-1 ring-border placeholder:text-muted-foreground"
+                  />
+                </div>
                 <button
                   type="submit"
                   id="btn-send"
@@ -987,6 +1051,11 @@
             id="admin-error"
             class="hidden rounded-lg bg-red-100 px-3 py-2 text-sm leading-snug text-red-800 ring-1 ring-red-200 dark:bg-red-950/80 dark:text-red-200 dark:ring-red-900"
             role="alert"
+          ></p>
+          <p
+            id="admin-ok"
+            class="hidden rounded-lg bg-emerald-100 px-3 py-2 text-sm leading-snug text-emerald-800 ring-1 ring-emerald-200 dark:bg-emerald-950/70 dark:text-emerald-200 dark:ring-emerald-900"
+            role="status"
           ></p>
 
           <div class="flex h-14 min-h-14 rounded-full bg-muted p-1.5" role="tablist" aria-label="Benutzerfilter">
@@ -1174,7 +1243,7 @@
             <div>
               <h2 id="profile-title" class="text-lg font-semibold">Profil</h2>
               <p class="mt-1 text-sm leading-relaxed text-muted-foreground">
-                Name, Avatar, Darstellung und Chatblasen.
+                Name, Avatar, Darstellung, Chatblasen und Passwort.
               </p>
             </div>
             <button
@@ -1287,6 +1356,50 @@
                 class="block w-full text-sm text-muted-foreground file:mr-3 file:inline-flex file:h-11 file:min-h-11 file:cursor-pointer file:rounded-xl file:border-0 file:bg-muted file:px-3 file:text-sm file:font-medium file:text-foreground"
               />
             </div>
+
+            <fieldset class="flex flex-col gap-3">
+              <legend class="text-sm font-medium text-foreground">Passwort ändern</legend>
+              <p class="text-xs leading-snug text-muted-foreground">
+                Leer lassen, wenn du das Passwort nicht ändern willst.
+              </p>
+              <div class="flex flex-col gap-2">
+                <label for="profile-password-current" class="text-sm font-medium">Aktuelles Passwort</label>
+                <input
+                  id="profile-password-current"
+                  name="currentPassword"
+                  type="password"
+                  autocomplete="current-password"
+                  minlength="8"
+                  maxlength="128"
+                  class="h-12 w-full rounded-xl bg-input px-4 text-base text-foreground ring-1 ring-border placeholder:text-muted-foreground"
+                />
+              </div>
+              <div class="flex flex-col gap-2">
+                <label for="profile-password-new" class="text-sm font-medium">Neues Passwort</label>
+                <input
+                  id="profile-password-new"
+                  name="newPassword"
+                  type="password"
+                  autocomplete="new-password"
+                  minlength="8"
+                  maxlength="128"
+                  class="h-12 w-full rounded-xl bg-input px-4 text-base text-foreground ring-1 ring-border placeholder:text-muted-foreground"
+                  placeholder="Mindestens 8 Zeichen"
+                />
+              </div>
+              <div class="flex flex-col gap-2">
+                <label for="profile-password-confirm" class="text-sm font-medium">Neues Passwort bestätigen</label>
+                <input
+                  id="profile-password-confirm"
+                  name="newPasswordConfirm"
+                  type="password"
+                  autocomplete="new-password"
+                  minlength="8"
+                  maxlength="128"
+                  class="h-12 w-full rounded-xl bg-input px-4 text-base text-foreground ring-1 ring-border placeholder:text-muted-foreground"
+                />
+              </div>
+            </fieldset>
 
             <p id="profile-error" class="hidden rounded-lg bg-red-100 px-3 py-2 text-sm text-red-800 dark:bg-red-950/80 dark:text-red-200" role="alert"></p>
             <p id="profile-ok" class="hidden rounded-lg bg-emerald-100 px-3 py-2 text-sm text-emerald-800 dark:bg-emerald-950/70 dark:text-emerald-200" role="status"></p>
@@ -1518,7 +1631,7 @@
       </div>
     </div>
 
-    <div id="enroute-overlay" class="fixed inset-0 z-50 hidden" hidden>
+    <div id="enroute-overlay" class="fixed inset-0 z-[80] hidden" hidden>
       <button type="button" id="enroute-backdrop" class="absolute inset-0 bg-black/60" aria-label="Unterwegs schließen"></button>
       <div class="flex min-h-full items-end justify-center p-4 sm:items-center">
         <section class="relative w-full max-w-sm rounded-2xl bg-card p-5 shadow-2xl ring-1 ring-border" role="dialog" aria-modal="true" aria-labelledby="enroute-title">

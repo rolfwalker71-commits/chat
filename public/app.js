@@ -40,9 +40,14 @@
   const tabRegister = document.getElementById("tab-register");
   const tabAdmin = document.getElementById("tab-admin");
   const wrapPasswordConfirm = document.getElementById("wrap-password-confirm");
+  const wrapResetCode = document.getElementById("wrap-reset-code");
   const inputUsername = document.getElementById("username");
   const inputPassword = document.getElementById("password");
   const inputPasswordConfirm = document.getElementById("password-confirm");
+  const inputResetCode = document.getElementById("reset-code");
+  const labelPassword = document.getElementById("label-password");
+  const authForgot = document.getElementById("auth-forgot");
+  const authResetBack = document.getElementById("auth-reset-back");
   const authError = document.getElementById("auth-error");
   const authSubmit = document.getElementById("auth-submit");
   const labelUsername = document.getElementById("label-username");
@@ -50,6 +55,7 @@
   const roomTitle = document.getElementById("room-title");
   const formMessage = document.getElementById("form-message");
   const messageInput = document.getElementById("message-input");
+  const mentionSuggest = document.getElementById("mention-suggest");
   const messageList = document.getElementById("message-list");
   const chatError = document.getElementById("chat-error");
   const btnSend = document.getElementById("btn-send");
@@ -60,6 +66,7 @@
   const btnAdminChat = document.getElementById("btn-admin-chat");
   const btnAdminLogout = document.getElementById("btn-admin-logout");
   const adminError = document.getElementById("admin-error");
+  const adminOk = document.getElementById("admin-ok");
   const tabAdminPending = document.getElementById("tab-admin-pending");
   const tabAdminAll = document.getElementById("tab-admin-all");
   const adminUserList = document.getElementById("admin-user-list");
@@ -108,6 +115,9 @@
   const profileError = document.getElementById("profile-error");
   const profileOk = document.getElementById("profile-ok");
   const profileSubmit = document.getElementById("profile-submit");
+  const profilePasswordCurrent = document.getElementById("profile-password-current");
+  const profilePasswordNew = document.getElementById("profile-password-new");
+  const profilePasswordConfirm = document.getElementById("profile-password-confirm");
   const btnAttach = document.getElementById("btn-attach");
   const attachTray = document.getElementById("attach-tray");
   const btnAttachImage = document.getElementById("btn-attach-image");
@@ -209,8 +219,9 @@
   const themeColorMeta = document.getElementById("theme-color-meta");
   const colorSchemeMeta = document.getElementById("color-scheme-meta");
 
-  /** @type {"login" | "register" | "admin"} */
+  /** @type {"login" | "register" | "admin" | "reset"} */
   let authMode = "login";
+  let mentionIndex = -1;
   /** @type {{ id: number, username: string, realName?: string, avatarUrl?: string, isAdmin?: boolean, isApproved?: boolean, pendingUsers?: number } | null} */
   let currentUser = null;
   /** @type {import("socket.io-client").Socket | null} */
@@ -293,6 +304,35 @@
   function displayName(user) {
     const real = (user?.realName || "").trim();
     return real || user?.username || "";
+  }
+
+  function appendMentionText(parent, content, mentions) {
+    const names = new Set((mentions || []).map((item) => String(item.username || "").toLowerCase()));
+    const str = String(content || "");
+    const re = /(@[a-zA-Z0-9_]{3,32})/g;
+    let last = 0;
+    let match;
+    while ((match = re.exec(str))) {
+      if (match.index > last) parent.append(document.createTextNode(str.slice(last, match.index)));
+      const token = match[1];
+      const uname = token.slice(1).toLowerCase();
+      const hit = names.has(uname);
+      const mine = Boolean(currentUser && uname === String(currentUser.username || "").toLowerCase());
+      const span = el(
+        "span",
+        hit ? (mine ? "rounded-sm bg-primary/15 font-semibold text-primary" : "font-semibold text-primary") : "",
+        token
+      );
+      parent.append(span);
+      last = match.index + token.length;
+    }
+    if (last < str.length) parent.append(document.createTextNode(str.slice(last)));
+  }
+
+  function appendMessageText(parent, message, className) {
+    const p = el("p", className);
+    appendMentionText(p, message.content || "", message.mentions);
+    parent.append(p);
   }
 
   function getInitials(user) {
@@ -486,6 +526,8 @@
     authMode = mode;
     const isRegister = mode === "register";
     const isAdminLogin = mode === "admin";
+    const isReset = mode === "reset";
+    const needsNewPassword = isRegister || isReset;
 
     tabLogin.setAttribute("aria-selected", String(mode === "login"));
     tabRegister.setAttribute("aria-selected", String(isRegister));
@@ -495,15 +537,26 @@
     tabRegister.className = pillClass(isRegister);
     tabAdmin.className = pillClass(isAdminLogin);
 
-    wrapPasswordConfirm.classList.toggle("hidden", !isRegister);
-    wrapPasswordConfirm.classList.toggle("flex", isRegister);
-    inputPasswordConfirm.required = isRegister;
-    inputPassword.autocomplete = isRegister ? "new-password" : "current-password";
+    wrapPasswordConfirm.classList.toggle("hidden", !needsNewPassword);
+    wrapPasswordConfirm.classList.toggle("flex", needsNewPassword);
+    inputPasswordConfirm.required = needsNewPassword;
+    wrapResetCode.classList.toggle("hidden", !isReset);
+    wrapResetCode.classList.toggle("flex", isReset);
+    inputResetCode.required = isReset;
+    if (labelPassword) {
+      labelPassword.textContent = isReset ? "Neues Passwort" : "Passwort";
+    }
+    inputPassword.autocomplete = needsNewPassword ? "new-password" : "current-password";
+    authForgot.classList.toggle("hidden", mode !== "login");
+    authResetBack.classList.toggle("hidden", !isReset);
+    authResetBack.classList.toggle("inline-flex", isReset);
     authSubmit.textContent = isRegister
       ? "Konto anlegen"
       : isAdminLogin
         ? "Als Admin anmelden"
-        : "Anmelden";
+        : isReset
+          ? "Neues Passwort setzen"
+          : "Anmelden";
     showError(authError, "");
   }
 
@@ -743,23 +796,44 @@
       showError(authError, "Passwort muss mindestens 8 Zeichen haben.");
       return;
     }
-    if (authMode === "register" && password !== inputPasswordConfirm.value) {
+    if ((authMode === "register" || authMode === "reset") && password !== inputPasswordConfirm.value) {
       showError(authError, "Die Passwörter stimmen nicht überein.");
+      return;
+    }
+    if (authMode === "reset" && !inputResetCode.value.trim()) {
+      showError(authError, "Bitte den Reset-Code eingeben.");
       return;
     }
 
     authSubmit.disabled = true;
     authSubmit.textContent =
-      authMode === "register" ? "Konto wird angelegt…" : authMode === "admin" ? "Admin-Anmeldung…" : "Anmeldung…";
+      authMode === "register"
+        ? "Konto wird angelegt…"
+        : authMode === "admin"
+          ? "Admin-Anmeldung…"
+          : authMode === "reset"
+            ? "Passwort wird gesetzt…"
+            : "Anmeldung…";
 
     try {
-      const path = authMode === "register" ? "/api/register" : "/api/login";
-      const body = { username, password };
-      if (authMode === "admin") body.admin = true;
-      currentUser = await api(path, {
-        method: "POST",
-        body: JSON.stringify(body),
-      });
+      if (authMode === "reset") {
+        currentUser = await api("/api/password/reset", {
+          method: "POST",
+          body: JSON.stringify({
+            username,
+            code: inputResetCode.value.trim(),
+            newPassword: password,
+          }),
+        });
+      } else {
+        const path = authMode === "register" ? "/api/register" : "/api/login";
+        const body = { username, password };
+        if (authMode === "admin") body.admin = true;
+        currentUser = await api(path, {
+          method: "POST",
+          body: JSON.stringify(body),
+        });
+      }
       const me = await api("/api/me");
       currentUser = { ...currentUser, ...me };
       aiStatus = me.ai || null;
@@ -776,7 +850,13 @@
     } finally {
       authSubmit.disabled = false;
       authSubmit.textContent =
-        authMode === "register" ? "Konto anlegen" : authMode === "admin" ? "Als Admin anmelden" : "Anmelden";
+        authMode === "register"
+          ? "Konto anlegen"
+          : authMode === "admin"
+            ? "Als Admin anmelden"
+            : authMode === "reset"
+              ? "Neues Passwort setzen"
+              : "Anmelden";
     }
   }
 
@@ -891,6 +971,15 @@
       if (user.createdAt) {
         text.append(el("p", "mt-1 text-xs text-muted-foreground", `Registriert ${formatTime(user.createdAt)}`));
       }
+      if (user.resetCode) {
+        text.append(
+          el(
+            "p",
+            "mt-2 break-all rounded-xl bg-muted px-3 py-2 font-mono text-sm text-foreground",
+            `Code ${user.resetCode} — 30 Min gültig`
+          )
+        );
+      }
       const badgeClass = user.isAdmin
         ? "bg-primary/15 text-primary"
         : user.isApproved
@@ -922,6 +1011,14 @@
         revoke.addEventListener("click", () => moderateUser(user.id, "revoke"));
         actions.append(revoke);
       }
+      const resetBtn = el(
+        "button",
+        "inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-sm font-medium ring-1 ring-border hover:bg-muted",
+        "Reset-Code"
+      );
+      resetBtn.type = "button";
+      resetBtn.addEventListener("click", () => issueResetCode(user));
+      actions.append(resetBtn);
       item.append(avatar, text, actions);
       adminUserList.append(item);
     }
@@ -930,6 +1027,7 @@
   async function loadAdminUsers() {
     if (!currentUser?.isAdmin) return;
     showError(adminError, "");
+    showError(adminOk, "");
     try {
       const data = await api("/api/admin/users");
       adminUsers = data.users || [];
@@ -942,6 +1040,7 @@
 
   async function moderateUser(userId, action) {
     showError(adminError, "");
+    showError(adminOk, "");
     try {
       const data = await api(`/api/admin/users/${userId}/${action}`, { method: "POST" });
       const updated = data.user;
@@ -950,6 +1049,27 @@
       }
       setAdminPendingBadge(data.pendingUsers);
       renderAdminUsers();
+    } catch (err) {
+      showError(adminError, err.message);
+    }
+  }
+
+  async function issueResetCode(user) {
+    showError(adminError, "");
+    showError(adminOk, "");
+    try {
+      const data = await api(`/api/admin/users/${user.id}/reset-code`, { method: "POST" });
+      const code = String(data.code || "");
+      adminUsers = adminUsers.map((item) =>
+        item.id === user.id ? { ...item, resetCode: code, resetExpiresAt: data.expiresAt } : item
+      );
+      renderAdminUsers();
+      try {
+        await navigator.clipboard.writeText(code);
+        showError(adminOk, `Reset-Code für @${user.username} kopiert: ${code}`);
+      } catch {
+        showError(adminOk, `Reset-Code für @${user.username}: ${code}`);
+      }
     } catch (err) {
       showError(adminError, err.message);
     }
@@ -1381,7 +1501,7 @@
       const n = new Notification(displayName(message) || "Neue Nachricht", {
         body: previewText(message).slice(0, 80),
         tag: `chat-${message.conversationId || "global"}`,
-        icon: "/icons/icon-192.png",
+        icon: "/icons/pwa-192.png",
       });
       n.addEventListener("click", () => {
         window.focus();
@@ -1916,7 +2036,7 @@
         link.append(img);
         bubble.append(link);
         if (message.content && message.content !== "Bild") {
-          bubble.append(el("p", "mt-2 break-words text-sm", message.content));
+          appendMessageText(bubble, message, "mt-2 break-words text-sm");
         }
       } else if (type === "voice" && message.file?.id && FILE_UUID.test(message.file.id)) {
         const audio = document.createElement("audio");
@@ -2021,14 +2141,12 @@
           );
         }
         if (message.content && message.content !== "Video") {
-          bubble.append(el("p", "mt-2 break-words text-sm", message.content));
+          appendMessageText(bubble, message, "mt-2 break-words text-sm");
         }
       } else if (type === "poll" && message.poll) {
         appendPoll(bubble, message);
       } else {
-        bubble.append(
-          el("p", "break-words whitespace-pre-wrap text-sm sm:text-base", message.content || "")
-        );
+        appendMessageText(bubble, message, "break-words whitespace-pre-wrap text-sm sm:text-base");
         appendLinkPreview(bubble, message);
       }
       appendMessageStatusBadges(bubble, message);
@@ -2672,8 +2790,108 @@
   }
 
   function setOverlay(overlay, open) {
+    if (!overlay) return;
     overlay.classList.toggle("hidden", !open);
     overlay.hidden = !open;
+  }
+
+  function bindPullToRefresh(scroller, onRefresh) {
+    if (!scroller) return;
+    const bar = document.createElement("div");
+    bar.className = "ptr-bar";
+    bar.setAttribute("aria-hidden", "true");
+    const spinner = document.createElement("span");
+    spinner.className = "ptr-spinner";
+    bar.append(spinner);
+    scroller.prepend(bar);
+    new MutationObserver(() => {
+      if (scroller.firstElementChild !== bar) scroller.prepend(bar);
+    }).observe(scroller, { childList: true });
+
+    const threshold = 56;
+    let startX = 0;
+    let startY = 0;
+    let armed = false;
+    let pulling = false;
+    let busy = false;
+    let distance = 0;
+
+    function setDistance(px) {
+      distance = Math.max(0, px);
+      const shown = Math.min(72, distance * 0.45);
+      bar.style.height = shown ? `${shown}px` : "0px";
+      bar.classList.toggle("is-armed", distance >= threshold);
+    }
+
+    scroller.addEventListener(
+      "touchstart",
+      (event) => {
+        if (busy || event.touches.length !== 1 || scroller.scrollTop > 1) return;
+        armed = true;
+        pulling = false;
+        distance = 0;
+        startX = event.touches[0].clientX;
+        startY = event.touches[0].clientY;
+      },
+      { passive: true }
+    );
+
+    scroller.addEventListener(
+      "touchmove",
+      (event) => {
+        if (!armed || busy) return;
+        const touch = event.touches[0];
+        const dy = touch.clientY - startY;
+        const dx = touch.clientX - startX;
+        if (!pulling) {
+          if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy)) {
+            armed = false;
+            return;
+          }
+          if (dy > 10 && scroller.scrollTop <= 0) pulling = true;
+        }
+        if (!pulling) return;
+        event.preventDefault();
+        setDistance(dy);
+      },
+      { passive: false }
+    );
+
+    scroller.addEventListener(
+      "touchend",
+      async () => {
+        if (!armed) return;
+        const shouldRefresh = pulling && distance >= threshold;
+        armed = false;
+        pulling = false;
+        if (!shouldRefresh) {
+          setDistance(0);
+          return;
+        }
+        busy = true;
+        bar.classList.add("is-busy");
+        setDistance(threshold * 2);
+        try {
+          await onRefresh();
+        } finally {
+          busy = false;
+          bar.classList.remove("is-busy");
+          setDistance(0);
+        }
+      },
+      { passive: true }
+    );
+  }
+
+  function reloadActiveThread() {
+    if (!socket || !chatSelected) return Promise.resolve();
+    return new Promise((resolve) => {
+      const timer = window.setTimeout(resolve, 5000);
+      socket.emit("conversation:open", { conversationId: activeConversationId }, () => {
+        window.clearTimeout(timer);
+        resolve();
+      });
+    });
   }
 
   function setNewChatPanel(open) {
@@ -3008,8 +3226,115 @@
     });
   }
 
+  function mentionCandidates() {
+    const byName = new Map();
+    const add = (user) => {
+      const username = String(user?.username || "").toLowerCase();
+      if (!username || (currentUser && user.id === currentUser.id)) return;
+      if (!byName.has(username)) byName.set(username, user);
+    };
+    const conv = activeConversation();
+    if (conv) {
+      (conv.members || []).forEach(add);
+      if (conv.peer) add(conv.peer);
+    } else {
+      for (const item of conversations) {
+        (item.members || []).forEach(add);
+        if (item.peer) add(item.peer);
+      }
+    }
+    return [...byName.values()];
+  }
+
+  function mentionQueryAt(value, caret) {
+    const before = value.slice(0, caret);
+    const match = before.match(/(^|[^a-zA-Z0-9_])@([a-zA-Z0-9_]{0,32})$/);
+    if (!match) return null;
+    return { start: caret - match[2].length - 1, query: match[2].toLowerCase() };
+  }
+
+  function hideMentionSuggest() {
+    mentionIndex = -1;
+    if (!mentionSuggest) return;
+    mentionSuggest.replaceChildren();
+    mentionSuggest.hidden = true;
+    mentionSuggest.classList.add("hidden");
+  }
+
+  function mentionItems() {
+    return mentionSuggest ? [...mentionSuggest.querySelectorAll("[data-username]")] : [];
+  }
+
+  function highlightMention(index) {
+    const items = mentionItems();
+    mentionIndex = items.length ? ((index % items.length) + items.length) % items.length : -1;
+    items.forEach((item, i) => {
+      item.classList.toggle("bg-muted", i === mentionIndex);
+    });
+  }
+
+  function insertMention(username) {
+    const caret = messageInput.selectionStart ?? messageInput.value.length;
+    const found = mentionQueryAt(messageInput.value, caret);
+    if (!found) {
+      hideMentionSuggest();
+      return;
+    }
+    const before = messageInput.value.slice(0, found.start);
+    const after = messageInput.value.slice(caret);
+    const insert = `@${username} `;
+    messageInput.value = `${before}${insert}${after}`;
+    const pos = before.length + insert.length;
+    messageInput.setSelectionRange(pos, pos);
+    hideMentionSuggest();
+    messageInput.focus();
+  }
+
+  function refreshMentionSuggest() {
+    if (!mentionSuggest) return;
+    const caret = messageInput.selectionStart ?? messageInput.value.length;
+    const found = mentionQueryAt(messageInput.value, caret);
+    if (!found) {
+      hideMentionSuggest();
+      return;
+    }
+    const matches = mentionCandidates()
+      .filter((user) => String(user.username || "").toLowerCase().startsWith(found.query))
+      .slice(0, 8);
+    if (!matches.length) {
+      hideMentionSuggest();
+      return;
+    }
+    mentionSuggest.replaceChildren();
+    for (const user of matches) {
+      const btn = el(
+        "button",
+        "flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm text-foreground hover:bg-muted",
+        ""
+      );
+      btn.type = "button";
+      btn.setAttribute("role", "option");
+      btn.dataset.username = user.username;
+      const avatar = el("div", "shrink-0");
+      fillAvatar(avatar, user, "h-8 w-8");
+      const col = el("div", "min-w-0");
+      col.append(el("p", "truncate font-medium", displayName(user)));
+      col.append(el("p", "truncate text-xs text-muted-foreground", `@${user.username}`));
+      btn.append(avatar, col);
+      btn.addEventListener("mousedown", (event) => {
+        event.preventDefault();
+        insertMention(user.username);
+      });
+      mentionSuggest.append(btn);
+    }
+    mentionSuggest.hidden = false;
+    mentionSuggest.classList.remove("hidden");
+    highlightMention(0);
+  }
+
   async function handleSend(event) {
     event.preventDefault();
+    hideMentionSuggest();
     showError(chatError, "");
     setAttachTray(false);
     if (!canPost()) {
@@ -3399,12 +3724,18 @@
   }
 
   function setEnroutePanel(open) {
+    if (!enrouteOverlay) return;
     setOverlay(enrouteOverlay, open);
     if (open) {
       showError(enrouteError, "");
-      enrouteDestination.value = "";
-      btnEnrouteSend.textContent = "Senden";
-      enrouteDestination.focus();
+      if (enrouteDestination) enrouteDestination.value = "";
+      if (btnEnrouteSend) {
+        btnEnrouteSend.disabled = false;
+        btnEnrouteSend.textContent = "Senden";
+      }
+      window.requestAnimationFrame(() => {
+        enrouteDestination?.focus();
+      });
     }
   }
 
@@ -3519,6 +3850,24 @@
       }
       applyUi();
       refreshSelfUi();
+      const currentPw = (profilePasswordCurrent?.value || "").trim();
+      const newPw = profilePasswordNew?.value || "";
+      const confirmPw = profilePasswordConfirm?.value || "";
+      if (currentPw || newPw || confirmPw) {
+        if (newPw.length < 8) {
+          throw new Error("Neues Passwort muss mindestens 8 Zeichen haben.");
+        }
+        if (newPw !== confirmPw) {
+          throw new Error("Die neuen Passwörter stimmen nicht überein.");
+        }
+        await api("/api/me/password", {
+          method: "POST",
+          body: JSON.stringify({ currentPassword: currentPw, newPassword: newPw }),
+        });
+        if (profilePasswordCurrent) profilePasswordCurrent.value = "";
+        if (profilePasswordNew) profilePasswordNew.value = "";
+        if (profilePasswordConfirm) profilePasswordConfirm.value = "";
+      }
       showError(profileOk, "Profil gespeichert.");
     } catch (err) {
       showError(profileError, err.message);
@@ -3791,6 +4140,8 @@
   tabLogin.addEventListener("click", () => setAuthMode("login"));
   tabRegister.addEventListener("click", () => setAuthMode("register"));
   tabAdmin.addEventListener("click", () => setAuthMode("admin"));
+  authForgot.addEventListener("click", () => setAuthMode("reset"));
+  authResetBack.addEventListener("click", () => setAuthMode("login"));
   formAuth.addEventListener("submit", handleAuthSubmit);
   formMessage.addEventListener("submit", handleSend);
   btnLogout.addEventListener("click", handleLogout);
@@ -3802,6 +4153,9 @@
   btnBack.addEventListener("click", closeThread);
   btnNewChat.addEventListener("click", () => setNewChatPanel(true));
   screenChats.addEventListener("scroll", closeOpenSwipe, { passive: true });
+  bindPullToRefresh(screenChats, () => loadConversations());
+  bindPullToRefresh(screenContacts, () => loadConversations());
+  bindPullToRefresh(messageList, () => reloadActiveThread());
   btnNewChatClose.addEventListener("click", () => setNewChatPanel(false));
   newChatBackdrop.addEventListener("click", () => setNewChatPanel(false));
   btnMore.addEventListener("click", () => setMorePanel(true));
@@ -3842,6 +4196,7 @@
     scheduleUiPersist();
   });
   btnAttach.addEventListener("click", () => setAttachTray(attachTray.hidden));
+  attachTray.addEventListener("click", (event) => event.stopPropagation());
   messageList.addEventListener("click", () => setAttachTray(false));
   btnAttachImage.addEventListener("click", () => {
     setAttachTray(false);
@@ -3866,10 +4221,16 @@
     setAttachTray(false);
     handleLocation();
   });
-  btnAttachEnroute.addEventListener("click", () => {
-    setAttachTray(false);
-    setEnroutePanel(true);
-  });
+  btnAttachEnroute?.addEventListener(
+    "click",
+    (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setAttachTray(false);
+      setEnroutePanel(true);
+    },
+    true
+  );
   btnAttachVoice.addEventListener("click", startRecording);
   btnRecordCancel.addEventListener("click", () => stopRecording(false));
   btnRecordSend.addEventListener("click", () => stopRecording(true));
@@ -3899,9 +4260,9 @@
   pollBackdrop.addEventListener("click", () => setPollPanel(false));
   btnPollAdd.addEventListener("click", addPollOptionInput);
   formPoll.addEventListener("submit", handlePollSubmit);
-  btnEnrouteClose.addEventListener("click", () => setEnroutePanel(false));
-  enrouteBackdrop.addEventListener("click", () => setEnroutePanel(false));
-  formEnroute.addEventListener("submit", handleEnrouteSubmit);
+  btnEnrouteClose?.addEventListener("click", () => setEnroutePanel(false));
+  enrouteBackdrop?.addEventListener("click", () => setEnroutePanel(false));
+  formEnroute?.addEventListener("submit", handleEnrouteSubmit);
   btnSummarize.addEventListener("click", async () => {
     showError(chatError, "");
     btnSummarize.disabled = true;
@@ -3999,8 +4360,35 @@
     hideMessageMenu();
   });
   messageInput.addEventListener("input", () => {
+    refreshMentionSuggest();
     if (messageInput.value.trim()) scheduleTyping();
     else if (typingSent) emitTyping(false);
+  });
+  messageInput.addEventListener("keydown", (event) => {
+    if (!mentionSuggest || mentionSuggest.hidden) return;
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      highlightMention(mentionIndex + 1);
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      highlightMention(mentionIndex - 1);
+      return;
+    }
+    if (event.key === "Enter" || event.key === "Tab") {
+      const items = mentionItems();
+      const chosen = items[mentionIndex] || items[0];
+      if (chosen?.dataset.username) {
+        event.preventDefault();
+        insertMention(chosen.dataset.username);
+      }
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      hideMentionSuggest();
+    }
   });
   formSearch.addEventListener("submit", (event) => {
     event.preventDefault();
