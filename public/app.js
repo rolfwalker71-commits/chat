@@ -1770,6 +1770,60 @@
     }
   }
 
+  function iconSvg(paths, filled, sizeClass) {
+    const svg = svgIcon(paths[0], filled);
+    svg.setAttribute("class", sizeClass || "h-3.5 w-3.5");
+    for (const d of paths.slice(1)) {
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("d", d);
+      path.setAttribute("fill", "none");
+      path.setAttribute("stroke", "currentColor");
+      path.setAttribute("stroke-width", "1.8");
+      path.setAttribute("stroke-linejoin", "round");
+      path.setAttribute("stroke-linecap", "round");
+      svg.append(path);
+    }
+    return svg;
+  }
+
+  function statusMark(label, paths, colorClass, filled) {
+    const mark = el("span", `inline-flex ${colorClass}`);
+    mark.setAttribute("title", label);
+    mark.setAttribute("aria-label", label);
+    mark.append(iconSvg(paths, filled, "h-3.5 w-3.5"));
+    return mark;
+  }
+
+  function appendMessageStatusBadges(bubble, message) {
+    const badges = [];
+    if (message.starred) {
+      badges.push(
+        statusMark(
+          "Gemerkt",
+          ["M16 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8Z", "M16 3v5h5"],
+          "text-primary"
+        )
+      );
+    }
+    if (message.editedAt) {
+      badges.push(
+        statusMark(
+          "Bearbeitet",
+          ["M12 20h9", "M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"],
+          "text-muted-foreground"
+        )
+      );
+    }
+    if (!badges.length) return;
+    bubble.classList.add("pr-8");
+    const cluster = el(
+      "span",
+      "pointer-events-none absolute right-2 top-2 flex items-center gap-0.5"
+    );
+    for (const badge of badges) cluster.append(badge);
+    bubble.append(cluster);
+  }
+
   function buildMessageRow(message) {
     const mine = currentUser && message.userId === currentUser.id;
     const row = el("article", `group relative flex gap-2 ${mine ? "justify-end" : "justify-start"}`);
@@ -1784,7 +1838,7 @@
 
     const bubble = el(
       "div",
-      `w-full px-3 py-2 leading-snug ${
+      `relative w-full px-3 py-2 leading-snug ${
         message.deleted
           ? "rounded-2xl bg-muted text-muted-foreground ring-1 ring-border"
           : mine
@@ -1926,12 +1980,7 @@
         );
         appendLinkPreview(bubble, message);
       }
-      if (message.editedAt) {
-        bubble.append(el("p", "mt-1 text-xs text-muted-foreground", "bearbeitet"));
-      }
-      if (message.starred) {
-        bubble.append(el("p", "mt-1 text-xs text-primary", "gemerkt"));
-      }
+      appendMessageStatusBadges(bubble, message);
     }
 
     const foot = el("span", "mt-1 flex items-center justify-end gap-1");
