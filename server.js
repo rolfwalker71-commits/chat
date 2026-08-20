@@ -48,7 +48,9 @@ require("dotenv").config();
 const http = require("http");
 const path = require("path");
 const crypto = require("crypto");
+const dns = require("dns").promises;
 const fs = require("fs/promises");
+const net = require("net");
 const express = require("express");
 const cookieParser = require("cookie-parser");
 const helmet = require("helmet");
@@ -95,7 +97,13 @@ const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_VOICE_BYTES = 2 * 1024 * 1024;
 const MAX_AVATAR_BYTES = 1 * 1024 * 1024;
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
+const MAX_VIDEO_BYTES = 16 * 1024 * 1024;
 const MAX_VOICE_DURATION_MS = 60_000;
+const MAX_VIDEO_DURATION_MS = 30_000;
+const MAX_POLL_OPTIONS = 8;
+const MIN_POLL_OPTIONS = 2;
+const MAX_POLL_OPTION_LENGTH = 80;
+const MAX_POLL_QUESTION_LENGTH = 200;
 const MAX_EDIT_AGE_MS = 24 * 60 * 60 * 1000;
 const BOT_USERNAME = "raum";
 const UPLOAD_DIR = UPLOAD_DIR_ENV || path.join(__dirname, "uploads");
@@ -109,6 +117,7 @@ const IMAGE_MIMES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif
 const AVATAR_MIMES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const VOICE_MIMES = new Set(["audio/webm", "audio/ogg", "audio/mp4", "audio/mpeg"]);
 const FILE_MIMES = new Set(["application/pdf", "application/zip"]);
+const VIDEO_MIMES = new Set(["video/mp4", "video/webm", "video/quicktime"]);
 const MIME_EXTENSION = {
   "image/jpeg": ".jpg",
   "image/png": ".png",
@@ -120,6 +129,9 @@ const MIME_EXTENSION = {
   "audio/mpeg": ".mp3",
   "application/pdf": ".pdf",
   "application/zip": ".zip",
+  "video/mp4": ".mp4",
+  "video/webm": ".webm",
+  "video/quicktime": ".mov",
 };
 const MODERATION_RE =
   /\b(nazi|hitler|kike|nigger|nigga|faggot|child\s*porn|kinderporn)/i;
@@ -341,7 +353,7 @@ function conversationRoom(id) {
 }
 
 /** Magic-Bytes statt Client-MIME — Nutzerangaben sind untrusted. */
-function detectMime(buffer) {
+function detectMime(buffer, kind = "") {
   if (!buffer || buffer.length < 12) return null;
   if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return "image/jpeg";
   if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) return "image/png";
@@ -350,10 +362,14 @@ function detectMime(buffer) {
     return "image/webp";
   }
   if (buffer[0] === 0x1a && buffer[1] === 0x45 && buffer[2] === 0xdf && buffer[3] === 0xa3) {
-    return "audio/webm";
+    return kind === "video" ? "video/webm" : "audio/webm";
   }
   if (buffer.toString("ascii", 0, 4) === "OggS") return "audio/ogg";
-  if (buffer.toString("ascii", 4, 8) === "ftyp") return "audio/mp4";
+  if (buffer.toString("ascii", 4, 8) === "ftyp") {
+    const brand = buffer.toString("ascii", 8, 12);
+    if (kind === "video") return brand === "qt  " ? "video/quicktime" : "video/mp4";
+    return "audio/mp4";
+  }
   if (buffer.toString("ascii", 0, 3) === "ID3") return "audio/mpeg";
   if (buffer[0] === 0xff && (buffer[1] & 0xe0) === 0xe0) return "audio/mpeg";
   if (buffer.toString("ascii", 0, 4) === "%PDF") return "application/pdf";
@@ -369,7 +385,7 @@ function likePattern(raw) {
 
 async function loadPublicUser(userId, { includeAdmin = false, includePrefs = false } = {}) {
   const { rows } = await pool.query(
-    `SELECT id, username, real_name, avatar_url, is_bot, is_admin, is_approved, last_seen_at, ui_prefs
+    `SELECT id, username, real_name, avatar_url, is_bot, is_admin, is_approved, last_seen_at, ui_prefs, global_muted_at
      FROM users WHERE id = $1`,
     [userId]
   );
@@ -411,6 +427,9 @@ function mapMessage(row) {
     transcript: deleted ? "" : row.transcript || "",
     file: null,
     location: null,
+    starred: false,
+    poll: null,
+    linkPreview: null,
   };
 
   if (row.reply_to_id) {
@@ -424,12 +443,21 @@ function mapMessage(row) {
     };
   }
 
-  if (!deleted && row.upload_id && (type === "image" || type === "voice" || type === "file")) {
+  if (!deleted && row.upload_id && (type === "image" || type === "voice" || type === "file" || type === "video")) {
     message.file = {
       id: row.upload_id,
       mime: row.upload_mime,
       durationMs: row.duration_ms,
       name: row.upload_name || "",
+    };
+  }
+
+  if (!deleted && row.link_preview && typeof row.link_preview === "object") {
+    message.linkPreview = {
+      url: String(row.link_preview.url || "").slice(0, 500),
+      title: String(row.link_preview.title || "").slice(0, 120),
+      description: String(row.link_preview.description || "").slice(0, 200),
+      image: String(row.link_preview.image || "").slice(0, 500),
     };
   }
 
@@ -447,7 +475,7 @@ function mapMessage(row) {
 const MESSAGE_SELECT = `
   m.id, m.user_id, m.content, m.created_at, m.conversation_id,
   m.message_type, m.upload_id, m.location_lat, m.location_lng, m.location_accuracy,
-  m.reply_to_id, m.deleted_at, m.transcript, m.edited_at,
+  m.reply_to_id, m.deleted_at, m.transcript, m.edited_at, m.link_preview,
   u.username, u.real_name, u.avatar_url,
   up.mime AS upload_mime, up.duration_ms, up.original_name AS upload_name,
   r.message_type AS reply_type, r.content AS reply_content, r.deleted_at AS reply_deleted_at,
@@ -487,6 +515,65 @@ async function attachReactions(messages, userId) {
   return messages;
 }
 
+async function attachStars(messages, userId) {
+  const ids = messages.map((m) => m.id).filter(Boolean);
+  if (!ids.length || !userId) return messages;
+  const { rows } = await pool.query(
+    `SELECT message_id FROM starred_messages WHERE user_id = $1 AND message_id = ANY($2::int[])`,
+    [userId, ids]
+  );
+  const starred = new Set(rows.map((row) => row.message_id));
+  for (const message of messages) {
+    message.starred = starred.has(message.id);
+  }
+  return messages;
+}
+
+async function attachPolls(messages, userId) {
+  const ids = messages.filter((m) => m.type === "poll" && !m.deleted).map((m) => m.id);
+  if (!ids.length) return messages;
+  const { rows } = await pool.query(
+    `
+    SELECT o.id, o.message_id, o.idx, o.label,
+           COUNT(v.user_id)::int AS votes,
+           BOOL_OR(v.user_id = $2) AS mine
+    FROM poll_options o
+    LEFT JOIN poll_votes v ON v.option_id = o.id
+    WHERE o.message_id = ANY($1::int[])
+    GROUP BY o.id
+    ORDER BY o.idx ASC
+    `,
+    [ids, userId]
+  );
+  const byMessage = new Map();
+  for (const row of rows) {
+    const list = byMessage.get(row.message_id) || [];
+    list.push({
+      id: row.id,
+      idx: row.idx,
+      label: row.label,
+      votes: row.votes,
+      mine: Boolean(row.mine),
+    });
+    byMessage.set(row.message_id, list);
+  }
+  for (const message of messages) {
+    if (message.type !== "poll" || message.deleted) continue;
+    message.poll = {
+      question: message.content || "",
+      options: byMessage.get(message.id) || [],
+    };
+  }
+  return messages;
+}
+
+async function enrichMessages(messages, userId) {
+  await attachReactions(messages, userId);
+  await attachStars(messages, userId);
+  await attachPolls(messages, userId);
+  return messages;
+}
+
 async function fetchMessages(conversationId, limit = HISTORY_LIMIT, viewerId = 0) {
   const { rows } = await pool.query(
     `
@@ -506,7 +593,7 @@ async function fetchMessages(conversationId, limit = HISTORY_LIMIT, viewerId = 0
     `,
     [conversationId, limit]
   );
-  return attachReactions(rows.map(mapMessage), viewerId);
+  return enrichMessages(rows.map(mapMessage), viewerId);
 }
 
 async function isConversationMember(userId, conversationId) {
@@ -531,17 +618,57 @@ async function loadConversationMembers(conversationId) {
   return rows.map(toPublicUser);
 }
 
+function applyBlockFlags(conv, userId, blockRows) {
+  if (!conv || conv.type !== "dm" || !conv.peer) return conv;
+  conv.blockedByMe = blockRows.some(
+    (row) => row.blocker_id === userId && row.blocked_id === conv.peer.id
+  );
+  conv.blockedMe = blockRows.some(
+    (row) => row.blocker_id === conv.peer.id && row.blocked_id === userId
+  );
+  return conv;
+}
+
+async function areUsersBlocked(userIdA, userIdB) {
+  if (!userIdA || !userIdB || userIdA === userIdB) return false;
+  const { rows } = await pool.query(
+    `SELECT 1 FROM user_blocks
+     WHERE (blocker_id = $1 AND blocked_id = $2) OR (blocker_id = $2 AND blocked_id = $1)
+     LIMIT 1`,
+    [userIdA, userIdB]
+  );
+  return rows.length > 0;
+}
+
+async function assertDmSendable(userId, conversationId) {
+  if (!conversationId) return;
+  const { rows } = await pool.query(`SELECT type FROM conversations WHERE id = $1`, [conversationId]);
+  if (!rows[0] || rows[0].type !== "dm") return;
+  const members = await loadConversationMembers(conversationId);
+  const peer = members.find((member) => member.id !== userId);
+  if (peer && (await areUsersBlocked(userId, peer.id))) {
+    const error = new Error("Dieser Chat ist blockiert.");
+    error.status = 403;
+    throw error;
+  }
+}
+
 function serializeConversation(row, members, currentUserId) {
-  return {
+  const conv = {
     id: row.id,
     type: row.type,
     title: row.title || "",
     createdAt: row.created_at.toISOString(),
     unreadCount: Number(row.unread_count) || 0,
     peerLastReadMessageId: row.type === "dm" ? row.peer_last_read_message_id || null : null,
+    peerLastDeliveredMessageId: row.type === "dm" ? row.peer_last_delivered_message_id || null : null,
+    pinned: Boolean(row.pinned_at),
+    muted: Boolean(row.muted_at),
     members,
-    lastMessage: row.last_content
+    lastMessage: row.last_content || row.last_id
       ? {
+          id: row.last_id || null,
+          userId: row.last_user_id || null,
           content: row.last_deleted_at ? "" : row.last_content,
           type: row.last_deleted_at ? "deleted" : row.last_type || "text",
           createdAt: row.last_at ? row.last_at.toISOString() : null,
@@ -552,7 +679,10 @@ function serializeConversation(row, members, currentUserId) {
       row.type === "dm"
         ? members.find((m) => m.id !== currentUserId) || members[0] || null
         : null,
+    blockedByMe: false,
+    blockedMe: false,
   };
+  return conv;
 }
 
 async function fetchConversationsForUser(userId) {
@@ -560,6 +690,9 @@ async function fetchConversationsForUser(userId) {
     `
     SELECT
       c.id, c.type, c.title, c.created_at,
+      me.pinned_at, me.hidden_at, me.muted_at,
+      last.id AS last_id,
+      last.user_id AS last_user_id,
       last.content AS last_content,
       last.message_type AS last_type,
       last.created_at AS last_at,
@@ -572,6 +705,13 @@ async function fetchConversationsForUser(userId) {
         LIMIT 1
       ) AS peer_last_read_message_id,
       (
+        SELECT cm.last_delivered_message_id
+        FROM conversation_members cm
+        WHERE cm.conversation_id = c.id AND cm.user_id <> $1
+        ORDER BY cm.user_id
+        LIMIT 1
+      ) AS peer_last_delivered_message_id,
+      (
         SELECT COUNT(*)::int
         FROM messages um
         WHERE um.conversation_id = c.id
@@ -582,21 +722,28 @@ async function fetchConversationsForUser(userId) {
     FROM conversations c
     JOIN conversation_members me ON me.conversation_id = c.id AND me.user_id = $1
     LEFT JOIN LATERAL (
-      SELECT content, message_type, created_at, deleted_at
+      SELECT id, user_id, content, message_type, created_at, deleted_at
       FROM messages
       WHERE conversation_id = c.id
       ORDER BY created_at DESC
       LIMIT 1
     ) last ON TRUE
-    ORDER BY COALESCE(last.created_at, c.created_at) DESC, c.id DESC
+    WHERE me.hidden_at IS NULL
+    ORDER BY me.pinned_at DESC NULLS LAST, COALESCE(last.created_at, c.created_at) DESC, c.id DESC
     `,
     [userId]
   );
 
   const result = [];
+  const { rows: blockRows } = await pool.query(
+    `SELECT blocker_id, blocked_id FROM user_blocks WHERE blocker_id = $1 OR blocked_id = $1`,
+    [userId]
+  );
   for (const row of rows) {
     const members = await loadConversationMembers(row.id);
-    result.push(serializeConversation(row, members, userId));
+    const conv = serializeConversation(row, members, userId);
+    applyBlockFlags(conv, userId, blockRows);
+    result.push(conv);
   }
   return result;
 }
@@ -622,6 +769,9 @@ async function getConversationPayload(conversationId, userId) {
     `
     SELECT
       c.id, c.type, c.title, c.created_at,
+      me.pinned_at, me.hidden_at, me.muted_at,
+      last.id AS last_id,
+      last.user_id AS last_user_id,
       last.content AS last_content,
       last.message_type AS last_type,
       last.created_at AS last_at,
@@ -634,6 +784,13 @@ async function getConversationPayload(conversationId, userId) {
         LIMIT 1
       ) AS peer_last_read_message_id,
       (
+        SELECT cm.last_delivered_message_id
+        FROM conversation_members cm
+        WHERE cm.conversation_id = c.id AND cm.user_id <> $2
+        ORDER BY cm.user_id
+        LIMIT 1
+      ) AS peer_last_delivered_message_id,
+      (
         SELECT COUNT(*)::int
         FROM messages um
         WHERE um.conversation_id = c.id
@@ -644,7 +801,7 @@ async function getConversationPayload(conversationId, userId) {
     FROM conversations c
     JOIN conversation_members me ON me.conversation_id = c.id AND me.user_id = $2
     LEFT JOIN LATERAL (
-      SELECT content, message_type, created_at, deleted_at
+      SELECT id, user_id, content, message_type, created_at, deleted_at
       FROM messages
       WHERE conversation_id = c.id
       ORDER BY created_at DESC
@@ -656,7 +813,16 @@ async function getConversationPayload(conversationId, userId) {
   );
   if (!rows[0]) return null;
   const members = await loadConversationMembers(conversationId);
-  return serializeConversation(rows[0], members, userId);
+  const conv = serializeConversation(rows[0], members, userId);
+  if (conv.type === "dm" && conv.peer) {
+    const { rows: blockRows } = await pool.query(
+      `SELECT blocker_id, blocked_id FROM user_blocks
+       WHERE (blocker_id = $1 AND blocked_id = $2) OR (blocker_id = $2 AND blocked_id = $1)`,
+      [userId, conv.peer.id]
+    );
+    applyBlockFlags(conv, userId, blockRows);
+  }
+  return conv;
 }
 
 function fallbackContent(type, content, location) {
@@ -665,6 +831,8 @@ function fallbackContent(type, content, location) {
   if (type === "image") return text || "Bild";
   if (type === "voice") return text || "Sprachnachricht";
   if (type === "file") return text || "Datei";
+  if (type === "video") return text || "Video";
+  if (type === "poll") return text || "Umfrage";
   if (type === "location" && location) {
     return `Standort: ${location.lat.toFixed(5)}, ${location.lng.toFixed(5)}`;
   }
@@ -735,6 +903,8 @@ function previewForward(message) {
   if (message.type === "image") return "Bild";
   if (message.type === "voice") return "Sprachnachricht";
   if (message.type === "file") return message.file?.name || "Datei";
+  if (message.type === "video") return "Video";
+  if (message.type === "poll") return "Umfrage";
   if (message.type === "location") return "Standort";
   return message.content || "";
 }
@@ -745,6 +915,137 @@ function isAllowedReaction(emoji) {
 
 function roomName(conversationId) {
   return conversationId ? conversationRoom(conversationId) : "global";
+}
+
+const FIRST_URL_RE = /https?:\/\/[^\s<>"'`)\]}]+/i;
+
+function extractFirstUrl(text) {
+  const match = String(text || "").match(FIRST_URL_RE);
+  if (!match) return null;
+  return match[0].replace(/[.,;:!?)]+$/, "");
+}
+
+function isBlockedIp(ip) {
+  if (net.isIP(ip) === 4) {
+    const parts = ip.split(".").map(Number);
+    const a = parts[0];
+    const b = parts[1];
+    if (a === 10 || a === 127 || a === 0 || a >= 224) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true;
+    return false;
+  }
+  if (net.isIP(ip) === 6) {
+    const n = String(ip).toLowerCase();
+    if (n === "::1" || n === "::") return true;
+    if (n.startsWith("fe80:") || n.startsWith("fc") || n.startsWith("fd") || n.startsWith("ff")) return true;
+    if (n.startsWith("::ffff:")) return isBlockedIp(n.slice(7));
+    return false;
+  }
+  return true;
+}
+
+function htmlMeta(html, property) {
+  const escaped = property.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(
+    `<meta[^>]+(?:property|name)=["']${escaped}["'][^>]*content=["']([^"']+)["']`,
+    "i"
+  );
+  const match = html.match(re);
+  if (match) return sanitizeText(match[1]);
+  const re2 = new RegExp(
+    `<meta[^>]+content=["']([^"']+)["'][^>]*(?:property|name)=["']${escaped}["']`,
+    "i"
+  );
+  const match2 = html.match(re2);
+  return match2 ? sanitizeText(match2[1]) : "";
+}
+
+async function fetchLinkPreview(rawUrl) {
+  let parsed;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+  if (!["http:", "https:"].includes(parsed.protocol)) return null;
+  if (parsed.username || parsed.password) return null;
+  const host = parsed.hostname.toLowerCase();
+  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")) {
+    return null;
+  }
+  if (net.isIP(host) && isBlockedIp(host)) return null;
+
+  const lookedUp = await dns.lookup(host, { all: true });
+  if (!lookedUp.length || lookedUp.some((entry) => isBlockedIp(entry.address))) return null;
+
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 3000);
+  let res;
+  try {
+    res = await fetch(parsed.href, {
+      method: "GET",
+      redirect: "manual",
+      signal: ac.signal,
+      headers: {
+        "User-Agent": "RaumChat/1.0 (+link-preview)",
+        Accept: "text/html,application/xhtml+xml",
+      },
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+  if (res.status >= 300 && res.status < 400) return null;
+  if (!res.ok) return null;
+
+  const preview = {
+    url: parsed.href.slice(0, 500),
+    title: parsed.hostname.slice(0, 120),
+    description: "",
+    image: "",
+  };
+  const ctype = String(res.headers.get("content-type") || "");
+  if (!ctype.includes("text/html") && !ctype.includes("application/xhtml")) return preview;
+
+  const buf = Buffer.from(await res.arrayBuffer()).subarray(0, 256 * 1024).toString("utf8");
+  const titleTag = buf.match(/<title[^>]*>([^<]{1,200})<\/title>/i);
+  preview.title = (htmlMeta(buf, "og:title") || (titleTag ? sanitizeText(titleTag[1]) : preview.title)).slice(0, 120);
+  preview.description = (htmlMeta(buf, "og:description") || htmlMeta(buf, "description")).slice(0, 200);
+  const image = htmlMeta(buf, "og:image");
+  if (image) {
+    try {
+      const imgUrl = new URL(image, parsed.href);
+      if (imgUrl.protocol === "http:" || imgUrl.protocol === "https:") {
+        preview.image = imgUrl.href.slice(0, 500);
+      }
+    } catch {
+      preview.image = "";
+    }
+  }
+  return preview;
+}
+
+async function scheduleLinkPreview(message) {
+  if (!message || message.type !== "text" || !message.content) return;
+  const url = extractFirstUrl(message.content);
+  if (!url) return;
+  try {
+    const preview = await fetchLinkPreview(url);
+    if (!preview) return;
+    await pool.query(`UPDATE messages SET link_preview = $2::jsonb WHERE id = $1 AND deleted_at IS NULL`, [
+      message.id,
+      JSON.stringify(preview),
+    ]);
+    io.to(roomName(message.conversationId)).emit("message:preview", {
+      id: message.id,
+      conversationId: message.conversationId,
+      linkPreview: preview,
+    });
+  } catch (err) {
+    console.error("Link-Vorschau fehlgeschlagen:", err.message);
+  }
 }
 
 async function canAccessConversation(userId, conversationId) {
@@ -771,7 +1072,7 @@ async function loadMessageRow(messageId) {
 async function loadPublicMessage(messageId, viewerId) {
   const row = await loadMessageRow(messageId);
   if (!row) return null;
-  const [message] = await attachReactions([mapMessage(row)], viewerId);
+  const [message] = await enrichMessages([mapMessage(row)], viewerId);
   return message;
 }
 
@@ -848,7 +1149,12 @@ async function markRead(userId, conversationId, messageId) {
     await pool.query(
       `
       UPDATE conversation_members
-      SET last_read_at = NOW(), last_read_message_id = $3
+      SET last_read_at = NOW(),
+          last_read_message_id = $3,
+          last_delivered_message_id = CASE
+            WHEN last_delivered_message_id IS NULL OR last_delivered_message_id < $3 THEN $3
+            ELSE last_delivered_message_id
+          END
       WHERE conversation_id = $1 AND user_id = $2
         AND (last_read_message_id IS NULL OR last_read_message_id < $3)
       `,
@@ -858,6 +1164,7 @@ async function markRead(userId, conversationId, messageId) {
       conversationId,
       userId,
       lastReadMessageId: messageId,
+      lastDeliveredMessageId: messageId,
     });
   } else {
     await pool.query(
@@ -871,6 +1178,52 @@ async function markRead(userId, conversationId, messageId) {
     );
   }
   return countUnread(userId, conversationId);
+}
+
+async function markDelivered(userId, conversationId, messageId) {
+  if (!conversationId || !messageId) return;
+  const result = await pool.query(
+    `
+    UPDATE conversation_members
+    SET last_delivered_message_id = $3
+    WHERE conversation_id = $1 AND user_id = $2
+      AND (last_delivered_message_id IS NULL OR last_delivered_message_id < $3)
+    `,
+    [conversationId, userId, messageId]
+  );
+  if (!result.rowCount) return;
+  io.to(roomName(conversationId)).emit("receipt:update", {
+    conversationId,
+    userId,
+    lastDeliveredMessageId: messageId,
+  });
+}
+
+async function markIncomingDelivered(userId) {
+  const { rows } = await pool.query(
+    `
+    UPDATE conversation_members cm
+    SET last_delivered_message_id = latest.id
+    FROM (
+      SELECT conversation_id, MAX(id) AS id
+      FROM messages
+      WHERE conversation_id IS NOT NULL
+      GROUP BY conversation_id
+    ) latest
+    WHERE cm.conversation_id = latest.conversation_id
+      AND cm.user_id = $1
+      AND (cm.last_delivered_message_id IS NULL OR cm.last_delivered_message_id < latest.id)
+    RETURNING cm.conversation_id, cm.last_delivered_message_id
+    `,
+    [userId]
+  );
+  for (const row of rows) {
+    io.to(roomName(row.conversation_id)).emit("receipt:update", {
+      conversationId: row.conversation_id,
+      userId,
+      lastDeliveredMessageId: row.last_delivered_message_id,
+    });
+  }
 }
 
 async function markUnread(userId, conversationId) {
@@ -1093,6 +1446,13 @@ async function initDatabase() {
   await pool.query(
     `ALTER TABLE conversation_members ADD COLUMN IF NOT EXISTS last_read_message_id INTEGER`
   );
+  await pool.query(
+    `ALTER TABLE conversation_members ADD COLUMN IF NOT EXISTS last_delivered_message_id INTEGER`
+  );
+  await pool.query(`ALTER TABLE conversation_members ADD COLUMN IF NOT EXISTS pinned_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE conversation_members ADD COLUMN IF NOT EXISTS hidden_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE conversation_members ADD COLUMN IF NOT EXISTS muted_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS global_muted_at TIMESTAMPTZ`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS uploads (
@@ -1138,6 +1498,7 @@ async function initDatabase() {
   await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS transcript TEXT`);
   await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS link_preview JSONB`);
 
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_messages_created_at
@@ -1167,6 +1528,55 @@ async function initDatabase() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_message_reactions_message
       ON message_reactions (message_id);
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS starred_messages (
+      user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (user_id, message_id)
+    );
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_starred_messages_user
+      ON starred_messages (user_id, created_at DESC);
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_blocks (
+      blocker_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      blocked_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (blocker_id, blocked_id),
+      CHECK (blocker_id <> blocked_id)
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS polls (
+      message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+      question   TEXT NOT NULL,
+      multi      BOOLEAN NOT NULL DEFAULT FALSE,
+      closed_at  TIMESTAMPTZ
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS poll_options (
+      id         SERIAL PRIMARY KEY,
+      message_id INTEGER NOT NULL REFERENCES polls(message_id) ON DELETE CASCADE,
+      idx        SMALLINT NOT NULL,
+      label      VARCHAR(80) NOT NULL,
+      UNIQUE (message_id, idx)
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS poll_votes (
+      option_id  INTEGER NOT NULL REFERENCES poll_options(id) ON DELETE CASCADE,
+      user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (option_id, user_id)
+    );
   `);
 
   await pool.query(`
@@ -1247,6 +1657,8 @@ function pushPreview(message) {
   if (type === "voice") return "Sprachnachricht";
   if (type === "location") return "Standort";
   if (type === "file") return message.file?.name || "Datei";
+  if (type === "video") return "Video";
+  if (type === "poll") return "Umfrage";
   return String(message.content || "Neue Nachricht").slice(0, 140);
 }
 
@@ -1305,14 +1717,24 @@ async function notifyPushForMessage(message, conversationId, senderId) {
       SELECT DISTINCT ps.user_id
       FROM push_subscriptions ps
       JOIN conversation_members cm ON cm.user_id = ps.user_id
-      WHERE cm.conversation_id = $1 AND ps.user_id <> $2
+      WHERE cm.conversation_id = $1 AND ps.user_id <> $2 AND cm.muted_at IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM user_blocks b
+          WHERE (b.blocker_id = ps.user_id AND b.blocked_id = $2)
+             OR (b.blocker_id = $2 AND b.blocked_id = ps.user_id)
+        )
       `,
       [conversationId, senderId]
     );
     userIds = rows.map((row) => row.user_id);
   } else {
     const { rows } = await pool.query(
-      `SELECT DISTINCT user_id FROM push_subscriptions WHERE user_id <> $1`,
+      `
+      SELECT DISTINCT ps.user_id
+      FROM push_subscriptions ps
+      JOIN users u ON u.id = ps.user_id
+      WHERE ps.user_id <> $1 AND u.global_muted_at IS NULL
+      `,
       [senderId]
     );
     userIds = rows.map((row) => row.user_id);
@@ -1424,14 +1846,14 @@ const uploadLimiter = rateLimit({
 
 const memoryUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_FILE_BYTES, files: 1, fields: 8 },
+  limits: { fileSize: MAX_VIDEO_BYTES, files: 1, fields: 8 },
 });
 
 function handleMulter(req, res, next) {
   memoryUpload.single("file")(req, res, (err) => {
     if (!err) return next();
     if (err.code === "LIMIT_FILE_SIZE") {
-      return sendError(res, 413, "Datei ist zu groß (max. 8 MB).");
+      return sendError(res, 413, "Datei ist zu groß (max. 16 MB).");
     }
     return sendError(res, 400, "Upload fehlgeschlagen.");
   });
@@ -1456,6 +1878,9 @@ app.get("/api/me", requireAuth, async (req, res) => {
     if (!user) return sendError(res, 401, "Nicht angemeldet.");
     user.globalUnread = await countGlobalUnread(req.user.id);
     user.ai = aiStatusPayload();
+    user.globalMuted = Boolean(
+      (await pool.query(`SELECT global_muted_at FROM users WHERE id = $1`, [req.user.id])).rows[0]?.global_muted_at
+    );
     if (user.isAdmin) {
       user.pendingUsers = await countPendingUsers();
     }
@@ -1557,15 +1982,24 @@ app.patch("/api/me", requireAuth, async (req, res) => {
       prefs.bubblePeer = raw ? raw.toLowerCase() : null;
     }
 
+    const hasGlobalMuted = Object.prototype.hasOwnProperty.call(req.body || {}, "globalMuted");
+    const globalMuted = hasGlobalMuted ? Boolean(req.body.globalMuted) : null;
+
     const { rows } = await pool.query(
-      `UPDATE users SET real_name = $1, avatar_url = $2, ui_prefs = $3::jsonb WHERE id = $4
-       RETURNING id, username, real_name, avatar_url, is_bot, is_admin, is_approved, last_seen_at, ui_prefs`,
-      [realName || null, avatarUrl || null, JSON.stringify(prefs), req.user.id]
+      `UPDATE users SET
+         real_name = $1,
+         avatar_url = $2,
+         ui_prefs = $3::jsonb,
+         global_muted_at = CASE WHEN $5::boolean IS NULL THEN global_muted_at WHEN $5 THEN NOW() ELSE NULL END
+       WHERE id = $4
+       RETURNING id, username, real_name, avatar_url, is_bot, is_admin, is_approved, last_seen_at, ui_prefs, global_muted_at`,
+      [realName || null, avatarUrl || null, JSON.stringify(prefs), req.user.id, globalMuted]
     );
 
     const user = toPublicUser(rows[0], { includeAdmin: true, includePrefs: true });
     refreshConnectionProfiles(user);
     io.emit("user:updated", user);
+    user.globalMuted = Boolean(rows[0].global_muted_at);
     return res.json(user);
   } catch (err) {
     console.error("Profil speichern fehlgeschlagen:", err);
@@ -1769,7 +2203,7 @@ app.get("/api/users", requireAuth, async (req, res) => {
   try {
     const q = sanitizeText(String(req.query.q || "")).slice(0, 64);
     const params = [req.user.id];
-    let where = `id <> $1 AND is_approved = TRUE`;
+    let where = `id <> $1`;
     if (q) {
       params.push(likePattern(q.toLowerCase()));
       where += ` AND (username ILIKE $2 ESCAPE '\\' OR COALESCE(real_name, '') ILIKE $2 ESCAPE '\\')`;
@@ -1780,7 +2214,12 @@ app.get("/api/users", requireAuth, async (req, res) => {
       SELECT id, username, real_name, avatar_url, is_bot, is_admin, is_approved, last_seen_at
       FROM users
       WHERE ${where}
-      ORDER BY username ASC
+        AND NOT EXISTS (
+          SELECT 1 FROM user_blocks b
+          WHERE (b.blocker_id = $1 AND b.blocked_id = users.id)
+             OR (b.blocker_id = users.id AND b.blocked_id = $1)
+        )
+      ORDER BY is_approved DESC, username ASC
       LIMIT 20
       `,
       params
@@ -1802,7 +2241,7 @@ app.get("/api/conversations", requireAuth, async (req, res) => {
   }
 });
 
-app.post("/api/conversations", requireAuth, requireApproved, async (req, res) => {
+app.post("/api/conversations", requireAuth, async (req, res) => {
   try {
     const raw = Array.isArray(req.body?.usernames) ? req.body.usernames : [];
     const names = [
@@ -1822,7 +2261,7 @@ app.post("/api/conversations", requireAuth, requireApproved, async (req, res) =>
 
     const { rows: userRows } = await pool.query(
       `SELECT id, username, real_name, avatar_url FROM users
-       WHERE username = ANY($1::text[]) AND (is_approved = TRUE OR is_bot = TRUE)`,
+       WHERE username = ANY($1::text[])`,
       [names]
     );
     if (userRows.length !== names.length) {
@@ -1832,9 +2271,17 @@ app.post("/api/conversations", requireAuth, requireApproved, async (req, res) =>
     const memberIds = [req.user.id, ...userRows.map((u) => u.id)];
     const type = memberIds.length === 2 ? "dm" : "group";
 
+    if (type === "dm" && (await areUsersBlocked(req.user.id, userRows[0].id))) {
+      return sendError(res, 403, "Diese Person ist blockiert.");
+    }
+
     if (type === "dm") {
       const existingId = await findExistingDm(req.user.id, userRows[0].id);
       if (existingId) {
+        await pool.query(
+          `UPDATE conversation_members SET hidden_at = NULL WHERE conversation_id = $1 AND user_id = $2`,
+          [existingId, req.user.id]
+        );
         const existing = await getConversationPayload(existingId, req.user.id);
         return res.json(existing);
       }
@@ -1928,7 +2375,7 @@ app.post("/api/conversations/:id/members", requireAuth, requireApproved, async (
     }
     const { rows: userRows } = await pool.query(
       `SELECT id, username, real_name, avatar_url, is_bot, is_approved, last_seen_at
-       FROM users WHERE username = $1 AND (is_approved = TRUE OR is_bot = TRUE)`,
+       FROM users WHERE username = $1`,
       [username]
     );
     const invitee = userRows[0];
@@ -1985,6 +2432,237 @@ app.delete("/api/conversations/:id/members/me", requireAuth, async (req, res) =>
   }
 });
 
+app.patch("/api/conversations/:id/me", requireAuth, async (req, res) => {
+  try {
+    const conversationId = parsePositiveInt(req.params.id);
+    if (!conversationId) return sendError(res, 400, "Ungültige Unterhaltung.");
+    if (!(await isConversationMember(req.user.id, conversationId))) {
+      return sendError(res, 403, "Kein Zugriff auf diese Unterhaltung.");
+    }
+
+    const hasPinned = Object.prototype.hasOwnProperty.call(req.body || {}, "pinned");
+    const hasHidden = Object.prototype.hasOwnProperty.call(req.body || {}, "hidden");
+    const hasMuted = Object.prototype.hasOwnProperty.call(req.body || {}, "muted");
+    if (!hasPinned && !hasHidden && !hasMuted) {
+      return sendError(res, 400, "pinned, hidden oder muted angeben.");
+    }
+    const pinned = hasPinned ? Boolean(req.body.pinned) : null;
+    const hidden = hasHidden ? Boolean(req.body.hidden) : null;
+    const muted = hasMuted ? Boolean(req.body.muted) : null;
+
+    await pool.query(
+      `
+      UPDATE conversation_members SET
+        pinned_at = CASE WHEN $3::boolean IS NULL THEN pinned_at WHEN $3 THEN NOW() ELSE NULL END,
+        hidden_at = CASE WHEN $4::boolean IS NULL THEN hidden_at WHEN $4 THEN NOW() ELSE NULL END,
+        muted_at = CASE WHEN $5::boolean IS NULL THEN muted_at WHEN $5 THEN NOW() ELSE NULL END
+      WHERE conversation_id = $1 AND user_id = $2
+      `,
+      [conversationId, req.user.id, pinned, hidden, muted]
+    );
+
+    if (hidden) {
+      return res.json({ ok: true, id: conversationId, hidden: true });
+    }
+    const payload = await getConversationPayload(conversationId, req.user.id);
+    return res.json(payload);
+  } catch (err) {
+    console.error("Chat-Einstellungen fehlgeschlagen:", err);
+    return sendError(res, 500, "Chat konnte nicht aktualisiert werden.");
+  }
+});
+
+app.get("/api/conversations/:id/media", requireAuth, async (req, res) => {
+  try {
+    let conversationId = null;
+    if (req.params.id !== "global") {
+      conversationId = parsePositiveInt(req.params.id);
+      if (!conversationId) return sendError(res, 400, "Ungültige Unterhaltung.");
+      if (!(await isConversationMember(req.user.id, conversationId))) {
+        return sendError(res, 403, "Kein Zugriff auf diese Unterhaltung.");
+      }
+    }
+    const { rows } = await pool.query(
+      `
+      SELECT ${MESSAGE_SELECT}
+      FROM messages m
+      JOIN users u ON u.id = m.user_id
+      LEFT JOIN uploads up ON up.id = m.upload_id
+      LEFT JOIN messages r ON r.id = m.reply_to_id
+      LEFT JOIN users ru ON ru.id = r.user_id
+      WHERE m.conversation_id IS NOT DISTINCT FROM $1
+        AND m.deleted_at IS NULL
+        AND m.message_type IN ('image', 'file', 'video')
+        AND m.upload_id IS NOT NULL
+      ORDER BY m.created_at DESC
+      LIMIT 80
+      `,
+      [conversationId]
+    );
+    return res.json({ items: rows.map(mapMessage) });
+  } catch (err) {
+    console.error("Medien laden fehlgeschlagen:", err);
+    return sendError(res, 500, "Medien konnten nicht geladen werden.");
+  }
+});
+
+app.get("/api/starred", requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `
+      SELECT ${MESSAGE_SELECT},
+             c.type AS conv_type, c.title AS conv_title,
+             s.created_at AS starred_at
+      FROM starred_messages s
+      JOIN messages m ON m.id = s.message_id
+      JOIN users u ON u.id = m.user_id
+      LEFT JOIN uploads up ON up.id = m.upload_id
+      LEFT JOIN messages r ON r.id = m.reply_to_id
+      LEFT JOIN users ru ON ru.id = r.user_id
+      LEFT JOIN conversations c ON c.id = m.conversation_id
+      WHERE s.user_id = $1
+        AND m.deleted_at IS NULL
+        AND (
+          m.conversation_id IS NULL
+          OR m.conversation_id IN (SELECT conversation_id FROM conversation_members WHERE user_id = $1)
+        )
+      ORDER BY s.created_at DESC
+      LIMIT 80
+      `,
+      [req.user.id]
+    );
+    const messages = await enrichMessages(rows.map(mapMessage), req.user.id);
+    const results = messages.map((message, index) => {
+      const row = rows[index];
+      return {
+        message,
+        conversationId: message.conversationId,
+        roomLabel:
+          message.conversationId == null
+            ? "Globaler Chat"
+            : row.conv_type === "group"
+              ? row.conv_title || "Gruppe"
+              : "Privater Chat",
+      };
+    });
+    return res.json({ results });
+  } catch (err) {
+    console.error("Merkzettel laden fehlgeschlagen:", err);
+    return sendError(res, 500, "Merkzettel konnte nicht geladen werden.");
+  }
+});
+
+app.post("/api/messages/:id/star", requireAuth, async (req, res) => {
+  try {
+    const messageId = parsePositiveInt(req.params.id);
+    if (!messageId) return sendError(res, 400, "Ungültige Nachricht.");
+    const row = await loadMessageRow(messageId);
+    if (!row || row.deleted_at) return sendError(res, 404, "Nachricht nicht gefunden.");
+    if (!(await canAccessConversation(req.user.id, row.conversation_id))) {
+      return sendError(res, 403, "Kein Zugriff auf diese Nachricht.");
+    }
+    const existing = await pool.query(
+      `SELECT 1 FROM starred_messages WHERE user_id = $1 AND message_id = $2`,
+      [req.user.id, messageId]
+    );
+    let starred;
+    if (existing.rows.length) {
+      await pool.query(`DELETE FROM starred_messages WHERE user_id = $1 AND message_id = $2`, [
+        req.user.id,
+        messageId,
+      ]);
+      starred = false;
+    } else {
+      await pool.query(`INSERT INTO starred_messages (user_id, message_id) VALUES ($1, $2)`, [
+        req.user.id,
+        messageId,
+      ]);
+      starred = true;
+    }
+    return res.json({ ok: true, starred });
+  } catch (err) {
+    console.error("Merken fehlgeschlagen:", err);
+    return sendError(res, 500, "Nachricht konnte nicht gemerkt werden.");
+  }
+});
+
+app.get("/api/blocks", requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `
+      SELECT u.id, u.username, u.real_name, u.avatar_url, u.is_bot, u.last_seen_at, b.created_at
+      FROM user_blocks b
+      JOIN users u ON u.id = b.blocked_id
+      WHERE b.blocker_id = $1
+      ORDER BY b.created_at DESC
+      `,
+      [req.user.id]
+    );
+    return res.json(rows.map((row) => ({ ...toPublicUser(row), blockedAt: row.created_at.toISOString() })));
+  } catch (err) {
+    console.error("Blockliste fehlgeschlagen:", err);
+    return sendError(res, 500, "Blockliste konnte nicht geladen werden.");
+  }
+});
+
+app.post("/api/blocks", requireAuth, async (req, res) => {
+  try {
+    const targetId = parsePositiveInt(req.body?.userId);
+    if (!targetId) return sendError(res, 400, "Ungültiger Benutzer.");
+    if (targetId === req.user.id) return sendError(res, 400, "Du kannst dich nicht selbst blockieren.");
+    const target = await loadPublicUser(targetId);
+    if (!target || target.isBot) return sendError(res, 404, "Benutzer nicht gefunden.");
+    await pool.query(
+      `INSERT INTO user_blocks (blocker_id, blocked_id) VALUES ($1, $2)
+       ON CONFLICT (blocker_id, blocked_id) DO NOTHING`,
+      [req.user.id, targetId]
+    );
+    const existingId = await findExistingDm(req.user.id, targetId);
+    if (existingId) {
+      const forMe = await getConversationPayload(existingId, req.user.id);
+      const forPeer = await getConversationPayload(existingId, targetId);
+      for (const sock of socketsForUser(req.user.id)) {
+        if (forMe) sock.emit("conversation:updated", forMe);
+      }
+      for (const sock of socketsForUser(targetId)) {
+        if (forPeer) sock.emit("conversation:updated", forPeer);
+      }
+      return res.json(forMe);
+    }
+    return res.json({ ok: true, blockedByMe: true });
+  } catch (err) {
+    console.error("Blockieren fehlgeschlagen:", err);
+    return sendError(res, 500, "Benutzer konnte nicht blockiert werden.");
+  }
+});
+
+app.delete("/api/blocks/:userId", requireAuth, async (req, res) => {
+  try {
+    const targetId = parsePositiveInt(req.params.userId);
+    if (!targetId) return sendError(res, 400, "Ungültiger Benutzer.");
+    await pool.query(`DELETE FROM user_blocks WHERE blocker_id = $1 AND blocked_id = $2`, [
+      req.user.id,
+      targetId,
+    ]);
+    const existingId = await findExistingDm(req.user.id, targetId);
+    if (existingId) {
+      const forMe = await getConversationPayload(existingId, req.user.id);
+      const forPeer = await getConversationPayload(existingId, targetId);
+      for (const sock of socketsForUser(req.user.id)) {
+        if (forMe) sock.emit("conversation:updated", forMe);
+      }
+      for (const sock of socketsForUser(targetId)) {
+        if (forPeer) sock.emit("conversation:updated", forPeer);
+      }
+      return res.json(forMe);
+    }
+    return res.json({ ok: true, blockedByMe: false });
+  } catch (err) {
+    console.error("Entsperren fehlgeschlagen:", err);
+    return sendError(res, 500, "Benutzer konnte nicht entsperrt werden.");
+  }
+});
+
 app.get("/api/search", requireAuth, async (req, res) => {
   try {
     const q = sanitizeText(String(req.query.q || "")).slice(0, 80);
@@ -2038,7 +2716,7 @@ app.get("/api/search", requireAuth, async (req, res) => {
       params
     );
 
-    const messages = await attachReactions(rows.map(mapMessage), req.user.id);
+    const messages = await enrichMessages(rows.map(mapMessage), req.user.id);
     const results = messages.map((message, index) => {
       const row = rows[index];
       return {
@@ -2162,7 +2840,7 @@ app.post("/api/ai/suggest-replies", requireAuth, async (req, res) => {
 });
 
 async function persistUpload({ userId, kind, buffer, durationMs, originalName }) {
-  const mime = detectMime(buffer);
+  const mime = detectMime(buffer, kind);
   if (!mime) {
     const error = new Error("Dateityp nicht erlaubt.");
     error.status = 400;
@@ -2189,9 +2867,22 @@ async function persistUpload({ userId, kind, buffer, durationMs, originalName })
     error.status = 400;
     throw error;
   }
+  if (kind === "video" && !VIDEO_MIMES.has(mime)) {
+    const error = new Error("Video: MP4 oder WebM.");
+    error.status = 400;
+    throw error;
+  }
 
   const maxBytes =
-    kind === "voice" ? MAX_VOICE_BYTES : kind === "avatar" ? MAX_AVATAR_BYTES : kind === "file" ? MAX_FILE_BYTES : MAX_IMAGE_BYTES;
+    kind === "voice"
+      ? MAX_VOICE_BYTES
+      : kind === "avatar"
+        ? MAX_AVATAR_BYTES
+        : kind === "file"
+          ? MAX_FILE_BYTES
+          : kind === "video"
+            ? MAX_VIDEO_BYTES
+            : MAX_IMAGE_BYTES;
   if (buffer.length > maxBytes) {
     const error = new Error(`Datei ist zu groß (max. ${Math.round(maxBytes / (1024 * 1024))} MB).`);
     error.status = 413;
@@ -2199,11 +2890,14 @@ async function persistUpload({ userId, kind, buffer, durationMs, originalName })
   }
 
   let duration = null;
-  if (kind === "voice") {
+  if (kind === "voice" || kind === "video") {
+    const maxDuration = kind === "video" ? MAX_VIDEO_DURATION_MS : MAX_VOICE_DURATION_MS;
     if (durationMs != null) {
       const n = Number(durationMs);
-      if (!Number.isFinite(n) || n < 0 || n > MAX_VOICE_DURATION_MS + 1500) {
-        const error = new Error("Sprachnachricht maximal 60 Sekunden.");
+      if (!Number.isFinite(n) || n < 0 || n > maxDuration + 1500) {
+        const error = new Error(
+          kind === "video" ? "Video maximal 30 Sekunden." : "Sprachnachricht maximal 60 Sekunden."
+        );
         error.status = 400;
         throw error;
       }
@@ -2244,8 +2938,8 @@ async function persistUpload({ userId, kind, buffer, durationMs, originalName })
 app.post("/api/uploads", requireAuth, requireApproved, uploadLimiter, handleMulter, async (req, res) => {
   try {
     const kind = sanitizeText(String(req.body?.kind || "")).toLowerCase();
-    if (!["image", "voice", "file"].includes(kind)) {
-      return sendError(res, 400, "Upload-Art muss image, voice oder file sein.");
+    if (!["image", "voice", "file", "video"].includes(kind)) {
+      return sendError(res, 400, "Upload-Art muss image, voice, file oder video sein.");
     }
     if (!req.file?.buffer) {
       return sendError(res, 400, "Keine Datei empfangen.");
@@ -2312,7 +3006,7 @@ app.get("/api/files/:id", requireAuth, async (req, res) => {
     const upload = rows[0];
     if (!upload) return sendError(res, 404, "Datei nicht gefunden.");
 
-    const allowedMimes = new Set([...IMAGE_MIMES, ...AVATAR_MIMES, ...VOICE_MIMES, ...FILE_MIMES]);
+    const allowedMimes = new Set([...IMAGE_MIMES, ...AVATAR_MIMES, ...VOICE_MIMES, ...FILE_MIMES, ...VIDEO_MIMES]);
     if (!allowedMimes.has(upload.mime)) {
       return sendError(res, 404, "Datei nicht gefunden.");
     }
@@ -2338,7 +3032,8 @@ app.get("/api/files/:id", requireAuth, async (req, res) => {
     res.setHeader("Cache-Control", "private, max-age=3600");
     const filename = (upload.original_name || `${upload.kind}-${upload.id}${MIME_EXTENSION[upload.mime] || ""}`)
       .replace(/["\r\n]/g, "");
-    const disposition = upload.kind === "file" && upload.mime !== "application/pdf" ? "attachment" : "inline";
+    const disposition =
+      upload.kind === "file" && upload.mime !== "application/pdf" ? "attachment" : "inline";
     res.setHeader("Content-Disposition", `${disposition}; filename="${filename}"`);
     return res.sendFile(abs);
   } catch (err) {
@@ -2363,12 +3058,12 @@ const typingByRoom = new Map();
 function uniqueOnlineUsers() {
   const byId = new Map();
   for (const info of connections.values()) {
-    if (!info.isApproved && !info.isAdmin) continue;
     byId.set(info.userId, {
       id: info.userId,
       username: info.username,
       realName: info.realName || "",
       avatarUrl: info.avatarUrl || "",
+      isApproved: Boolean(info.isApproved || info.isAdmin),
     });
   }
   return Array.from(byId.values()).sort((a, b) =>
@@ -2540,6 +3235,7 @@ async function insertAndBroadcastMessage({
   location,
   replyToId,
   transcript,
+  poll,
 }) {
   const { rows } = await pool.query(
     `
@@ -2564,13 +3260,46 @@ async function insertAndBroadcastMessage({
     ]
   );
 
+  if (poll && type === "poll") {
+    await pool.query(`INSERT INTO polls (message_id, question, multi) VALUES ($1, $2, $3)`, [
+      rows[0].id,
+      poll.question,
+      Boolean(poll.multi),
+    ]);
+    for (let i = 0; i < poll.options.length; i += 1) {
+      await pool.query(`INSERT INTO poll_options (message_id, idx, label) VALUES ($1, $2, $3)`, [
+        rows[0].id,
+        i,
+        poll.options[i],
+      ]);
+    }
+  }
+
   const message = await loadPublicMessage(rows[0].id, user.id);
   io.to(roomName(conversationId)).emit("message:new", message);
 
   if (conversationId) {
+    const { rows: revealed } = await pool.query(
+      `
+      UPDATE conversation_members
+      SET hidden_at = NULL
+      WHERE conversation_id = $1 AND hidden_at IS NOT NULL
+      RETURNING user_id
+      `,
+      [conversationId]
+    );
+    for (const row of revealed) {
+      const payload = await getConversationPayload(conversationId, row.user_id);
+      for (const sock of socketsForUser(row.user_id)) {
+        if (payload) sock.emit("conversation:new", payload);
+      }
+    }
     const members = await loadConversationMembers(conversationId);
     for (const member of members) {
       if (member.id === user.id) continue;
+      if (socketsForUser(member.id).length) {
+        await markDelivered(member.id, conversationId, message.id);
+      }
       if (isUserViewing(member.id, conversationId)) {
         await markRead(member.id, conversationId, message.id);
       }
@@ -2595,6 +3324,12 @@ async function insertAndBroadcastMessage({
     console.error("Push-Versand fehlgeschlagen:", err.message);
   });
 
+  if (type === "text") {
+    scheduleLinkPreview(message).catch((err) => {
+      console.error("Link-Vorschau fehlgeschlagen:", err.message);
+    });
+  }
+
   if (!user.isBot) {
     maybeReplyAsBot(message, conversationId, user).catch((err) =>
       console.error("Bot-Antwort fehlgeschlagen:", err)
@@ -2608,6 +3343,7 @@ async function maybeReplyAsBot(userMessage, conversationId, fromUser) {
   const bot = await loadBotUser();
   if (!bot || fromUser.id === bot.id) return;
   if (userMessage.deleted) return;
+  if (userMessage.type !== "text") return;
 
   const text = userMessage.content || "";
   const mentioned = /(?:^|\s)@raum\b|^\/(help|hilfe)\b/i.test(text);
@@ -2690,6 +3426,9 @@ io.on("connection", async (socket) => {
 
   log(`Socket verbunden: ${profile.username} (${socket.id})`);
   broadcastOnlineUsers();
+  markIncomingDelivered(userId).catch((err) => {
+    console.error("Zustellung beim Verbinden fehlgeschlagen:", err);
+  });
 
   try {
     const history = await fetchMessages(null, HISTORY_LIMIT, userId);
@@ -2754,7 +3493,7 @@ io.on("connection", async (socket) => {
       }
 
       const type = sanitizeText(String(payload?.type || "text")) || "text";
-      if (!["text", "image", "location", "voice", "file"].includes(type)) {
+      if (!["text", "image", "location", "voice", "file", "video", "poll"].includes(type)) {
         respond({ ok: false, error: "Unbekannter Nachrichtentyp." });
         return;
       }
@@ -2770,6 +3509,13 @@ io.on("connection", async (socket) => {
           respond({ ok: false, error: "Kein Zugriff auf diese Unterhaltung." });
           return;
         }
+      }
+
+      try {
+        await assertDmSendable(userId, conversationId);
+      } catch (blockErr) {
+        respond({ ok: false, error: blockErr.message || "Dieser Chat ist blockiert." });
+        return;
       }
 
       let replyToId = null;
@@ -2841,7 +3587,7 @@ io.on("connection", async (socket) => {
         return;
       }
 
-      if (type === "image" || type === "voice" || type === "file") {
+      if (type === "image" || type === "voice" || type === "file" || type === "video") {
         const uploadId = String(payload?.uploadId || "");
         if (!/^[0-9a-f-]{36}$/i.test(uploadId)) {
           respond({ ok: false, error: "Ungültige Datei." });
@@ -2876,9 +3622,49 @@ io.on("connection", async (socket) => {
         respond({ ok: true, id: message.id });
         return;
       }
+
+      if (type === "poll") {
+        if (!conversationId) {
+          respond({ ok: false, error: "Umfragen nur in Gruppen." });
+          return;
+        }
+        const { rows: convRows } = await pool.query(`SELECT type FROM conversations WHERE id = $1`, [
+          conversationId,
+        ]);
+        if (!convRows[0] || convRows[0].type !== "group") {
+          respond({ ok: false, error: "Umfragen nur in Gruppen." });
+          return;
+        }
+        const question = sanitizeText(String(payload?.question || payload?.content || "")).slice(
+          0,
+          MAX_POLL_QUESTION_LENGTH
+        );
+        if (!question) {
+          respond({ ok: false, error: "Frage darf nicht leer sein." });
+          return;
+        }
+        const rawOptions = Array.isArray(payload?.options) ? payload.options : [];
+        const options = [
+          ...new Set(rawOptions.map((opt) => sanitizeText(String(opt || "")).slice(0, MAX_POLL_OPTION_LENGTH)).filter(Boolean)),
+        ];
+        if (options.length < MIN_POLL_OPTIONS || options.length > MAX_POLL_OPTIONS) {
+          respond({ ok: false, error: `Umfrage: ${MIN_POLL_OPTIONS}–${MAX_POLL_OPTIONS} Antworten.` });
+          return;
+        }
+        const message = await insertAndBroadcastMessage({
+          user: liveUser,
+          conversationId,
+          type,
+          content: question,
+          replyToId,
+          poll: { question, options, multi: false },
+        });
+        respond({ ok: true, id: message.id });
+        return;
+      }
     } catch (err) {
       console.error("Nachricht speichern fehlgeschlagen:", err);
-      respond({ ok: false, error: "Nachricht konnte nicht gesendet werden." });
+      respond({ ok: false, error: err.status === 403 ? err.message : "Nachricht konnte nicht gesendet werden." });
     }
   });
 
@@ -2971,6 +3757,84 @@ io.on("connection", async (socket) => {
     } catch (err) {
       console.error("Reaktion fehlgeschlagen:", err);
       respond({ ok: false, error: "Reaktion konnte nicht gespeichert werden." });
+    }
+  });
+
+  socket.on("poll:vote", async (payload, ack) => {
+    const respond = typeof ack === "function" ? ack : () => {};
+    try {
+      if (!socketCanPost(socket)) {
+        respond({ ok: false, error: "Dein Konto wartet noch auf Freigabe durch einen Admin." });
+        return;
+      }
+      if (!allowAction(socket, "poll", 5_000, 20)) {
+        respond({ ok: false, error: "Zu viele Stimmen in kurzer Zeit." });
+        return;
+      }
+      const optionId = parsePositiveInt(payload?.optionId);
+      if (!optionId) {
+        respond({ ok: false, error: "Ungültige Antwort." });
+        return;
+      }
+      const { rows } = await pool.query(
+        `
+        SELECT o.id, o.message_id, m.conversation_id, m.deleted_at, m.message_type
+        FROM poll_options o
+        JOIN messages m ON m.id = o.message_id
+        WHERE o.id = $1
+        `,
+        [optionId]
+      );
+      const row = rows[0];
+      if (!row || row.deleted_at || row.message_type !== "poll") {
+        respond({ ok: false, error: "Umfrage nicht gefunden." });
+        return;
+      }
+      if (!(await canAccessConversation(userId, row.conversation_id))) {
+        respond({ ok: false, error: "Kein Zugriff auf diese Umfrage." });
+        return;
+      }
+      await assertDmSendable(userId, row.conversation_id);
+
+      const existing = await pool.query(
+        `SELECT 1 FROM poll_votes WHERE option_id = $1 AND user_id = $2`,
+        [optionId, userId]
+      );
+      await pool.query(
+        `DELETE FROM poll_votes
+         WHERE user_id = $1 AND option_id IN (SELECT id FROM poll_options WHERE message_id = $2)`,
+        [userId, row.message_id]
+      );
+      if (!existing.rows.length) {
+        await pool.query(`INSERT INTO poll_votes (option_id, user_id) VALUES ($1, $2)`, [optionId, userId]);
+      }
+
+      const [message] = await enrichMessages(
+        [mapMessage(await loadMessageRow(row.message_id))],
+        userId
+      );
+      const selected = !existing.rows.length;
+      const update = {
+        messageId: row.message_id,
+        conversationId: row.conversation_id,
+        options: (message.poll?.options || []).map((opt) => ({
+          id: opt.id,
+          idx: opt.idx,
+          label: opt.label,
+          votes: opt.votes,
+        })),
+        voterId: userId,
+        optionId,
+        selected,
+      };
+      io.to(roomName(row.conversation_id)).emit("poll:update", update);
+      respond({ ok: true, poll: message.poll });
+    } catch (err) {
+      console.error("Umfrage-Stimme fehlgeschlagen:", err);
+      respond({
+        ok: false,
+        error: err.status === 403 ? err.message : "Stimme konnte nicht gespeichert werden.",
+      });
     }
   });
 

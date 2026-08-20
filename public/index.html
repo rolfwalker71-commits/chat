@@ -124,6 +124,10 @@
         --theme-hex: #09090b;
       }
 
+      html {
+        font-size: 18px;
+      }
+
       html,
       body {
         height: var(--app-height);
@@ -234,6 +238,74 @@
         animation-delay: 0.3s;
       }
 
+      .conv-swipe {
+        position: relative;
+        display: block;
+        overflow: hidden;
+        isolation: isolate;
+        touch-action: pan-y;
+        background-color: rgb(var(--card));
+      }
+      .conv-action {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        z-index: 0;
+        display: flex;
+        width: 5.5rem;
+        margin: 0;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 0.2rem;
+        border: 0;
+        padding: 0.5rem;
+        font-family: inherit;
+        font-size: 0.7rem;
+        font-weight: 600;
+        line-height: 1.15;
+        cursor: pointer;
+      }
+      .conv-action-pin {
+        left: 0;
+        background-color: rgb(var(--primary));
+        color: rgb(var(--primary-foreground));
+      }
+      .conv-action-delete {
+        right: 0;
+        background-color: rgb(185 28 28);
+        color: rgb(254 226 226);
+      }
+      /* type=button hat in Tailwind Preflight background:transparent — höhere Spezifität. */
+      button.conv-swipe-front {
+        position: relative;
+        z-index: 1;
+        display: flex;
+        width: 100%;
+        min-height: 4.5rem;
+        margin: 0;
+        box-sizing: border-box;
+        align-items: center;
+        gap: 0.75rem;
+        overflow: hidden;
+        border: 0;
+        border-radius: 0;
+        padding: 0.625rem 0.75rem;
+        background-color: rgb(var(--card));
+        background-image: none;
+        color: inherit;
+        font: inherit;
+        text-align: left;
+        cursor: pointer;
+        will-change: transform;
+      }
+      button.conv-swipe-front:hover {
+        background-color: rgb(var(--muted) / 0.55);
+      }
+      button.conv-swipe-front.is-active {
+        background-color: rgb(var(--muted));
+      }
+
       .msg-highlight {
         outline: 2px solid rgb(var(--primary));
         outline-offset: 2px;
@@ -246,6 +318,8 @@
       }
 
       #message-list [data-bubble] {
+        width: 100%;
+        box-sizing: border-box;
         transition: transform 0.14s ease;
       }
 
@@ -738,6 +812,25 @@
                   </span>
                   <span class="text-xs font-medium leading-snug">Datei</span>
                 </button>
+                <button type="button" id="btn-attach-video" role="menuitem" class="flex h-auto min-h-0 flex-col items-center gap-1 rounded-2xl px-1 py-2 text-foreground hover:bg-muted">
+                  <span class="inline-flex h-11 min-h-11 w-11 items-center justify-center rounded-full bg-muted text-primary" aria-hidden="true">
+                    <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <rect x="3" y="5" width="14" height="14" rx="2" />
+                      <path d="m17 10 4-2v8l-4-2" />
+                    </svg>
+                  </span>
+                  <span class="text-xs font-medium leading-snug">Video</span>
+                </button>
+                <button type="button" id="btn-attach-poll" role="menuitem" class="hidden h-auto min-h-0 flex-col items-center gap-1 rounded-2xl px-1 py-2 text-foreground hover:bg-muted">
+                  <span class="inline-flex h-11 min-h-11 w-11 items-center justify-center rounded-full bg-muted text-primary" aria-hidden="true">
+                    <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M4 6h10" />
+                      <path d="M4 12h16" />
+                      <path d="M4 18h7" />
+                    </svg>
+                  </span>
+                  <span class="text-xs font-medium leading-snug">Umfrage</span>
+                </button>
               </div>
 
               <div class="flex items-end gap-2">
@@ -793,6 +886,7 @@
               </div>
               <input id="input-image" type="file" accept="image/jpeg,image/png,image/webp,image/gif" class="sr-only" />
               <input id="input-file" type="file" accept="application/pdf,application/zip,.pdf,.zip" class="sr-only" />
+              <input id="input-video" type="file" accept="video/mp4,video/webm,video/quicktime" class="sr-only" />
             </form>
           </div>
         </section>
@@ -920,6 +1014,13 @@
           </button>
           <button
             type="button"
+            id="btn-starred"
+            class="flex min-h-11 w-full items-center rounded-xl px-3 text-left text-sm font-medium hover:bg-muted"
+          >
+            Merkzettel
+          </button>
+          <button
+            type="button"
             id="btn-admin"
             class="hidden min-h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-sm font-medium hover:bg-muted"
           >
@@ -954,7 +1055,7 @@
             <div>
               <h2 id="new-chat-title" class="text-lg font-semibold">Neuer Chat</h2>
               <p class="mt-1 text-sm leading-relaxed text-muted-foreground">
-                Namen suchen und eine Unterhaltung starten.
+                Benutzernamen oder echten Namen suchen. Neue Konten sind sofort auffindbar.
               </p>
             </div>
             <button
@@ -977,6 +1078,7 @@
             />
             <ul id="search-picked" class="mt-2 flex flex-wrap gap-1"></ul>
             <ul id="user-search-results" class="mt-2 flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto"></ul>
+            <p id="new-chat-error" class="mt-2 hidden rounded-lg bg-red-100 px-3 py-2 text-sm text-red-800 dark:bg-red-950/80 dark:text-red-200" role="alert"></p>
             <button
               type="submit"
               id="btn-start-chat"
@@ -1147,6 +1249,15 @@
           <button type="button" id="btn-mark-unread" class="flex min-h-11 w-full items-center rounded-xl px-3 text-left text-sm font-medium hover:bg-muted" role="menuitem">
             Als ungelesen markieren
           </button>
+          <button type="button" id="btn-mute-chat" class="flex min-h-11 w-full items-center rounded-xl px-3 text-left text-sm font-medium hover:bg-muted" role="menuitem">
+            Chat stummschalten
+          </button>
+          <button type="button" id="btn-chat-media" class="flex min-h-11 w-full items-center rounded-xl px-3 text-left text-sm font-medium hover:bg-muted" role="menuitem">
+            Geteilte Medien
+          </button>
+          <button type="button" id="btn-block-user" class="hidden min-h-11 w-full items-center rounded-xl px-3 text-left text-sm font-medium text-red-700 hover:bg-red-100 dark:text-red-200 dark:hover:bg-red-950/50" role="menuitem">
+            Blockieren
+          </button>
           <button type="button" id="btn-summarize" class="flex min-h-11 w-full items-center rounded-xl px-3 text-left text-sm font-medium hover:bg-muted" role="menuitem">
             Zusammenfassen
           </button>
@@ -1244,6 +1355,64 @@
             </button>
           </div>
           <ul id="forward-targets" class="flex max-h-80 flex-col gap-1 overflow-y-auto"></ul>
+        </section>
+      </div>
+    </div>
+
+    <div id="media-overlay" class="fixed inset-0 z-50 hidden" hidden>
+      <button type="button" id="media-backdrop" class="absolute inset-0 bg-black/60" aria-label="Medien schließen"></button>
+      <div class="flex min-h-full items-end justify-center p-4 sm:items-center">
+        <section class="relative flex max-h-[min(36rem,90dvh)] w-full max-w-lg flex-col rounded-2xl bg-card p-5 shadow-2xl ring-1 ring-border" role="dialog" aria-modal="true" aria-labelledby="media-title">
+          <div class="mb-3 flex items-center justify-between gap-3">
+            <h2 id="media-title" class="text-base font-semibold">Geteilte Medien</h2>
+            <button type="button" id="btn-media-close" class="inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-sm ring-1 ring-border">
+              Schließen
+            </button>
+          </div>
+          <p id="media-empty" class="hidden text-sm text-muted-foreground">Noch keine Bilder oder Dateien in diesem Chat.</p>
+          <ul id="media-list" class="grid min-h-0 flex-1 grid-cols-3 gap-2 overflow-y-auto"></ul>
+        </section>
+      </div>
+    </div>
+
+    <div id="starred-overlay" class="fixed inset-0 z-50 hidden" hidden>
+      <button type="button" id="starred-backdrop" class="absolute inset-0 bg-black/60" aria-label="Merkzettel schließen"></button>
+      <div class="flex min-h-full items-end justify-center p-4 sm:items-center">
+        <section class="relative flex max-h-[min(36rem,90dvh)] w-full max-w-lg flex-col rounded-2xl bg-card p-5 shadow-2xl ring-1 ring-border" role="dialog" aria-modal="true" aria-labelledby="starred-title">
+          <div class="mb-3 flex items-center justify-between gap-3">
+            <h2 id="starred-title" class="text-base font-semibold">Merkzettel</h2>
+            <button type="button" id="btn-starred-close" class="inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-sm ring-1 ring-border">
+              Schließen
+            </button>
+          </div>
+          <ul id="starred-list" class="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto"></ul>
+        </section>
+      </div>
+    </div>
+
+    <div id="poll-overlay" class="fixed inset-0 z-50 hidden" hidden>
+      <button type="button" id="poll-backdrop" class="absolute inset-0 bg-black/60" aria-label="Umfrage schließen"></button>
+      <div class="flex min-h-full items-end justify-center p-4 sm:items-center">
+        <section class="relative w-full max-w-sm rounded-2xl bg-card p-5 shadow-2xl ring-1 ring-border" role="dialog" aria-modal="true" aria-labelledby="poll-title">
+          <div class="mb-3 flex items-center justify-between gap-3">
+            <h2 id="poll-title" class="text-base font-semibold">Umfrage</h2>
+            <button type="button" id="btn-poll-close" class="inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-sm ring-1 ring-border">
+              Schließen
+            </button>
+          </div>
+          <form id="form-poll" class="flex flex-col gap-3">
+            <label for="poll-question" class="text-sm font-medium">Frage</label>
+            <input id="poll-question" type="text" maxlength="200" required class="h-12 w-full rounded-xl bg-input px-4 text-base text-foreground ring-1 ring-border" placeholder="Worüber abstimmen?" />
+            <p class="text-sm font-medium">Antworten</p>
+            <div id="poll-options" class="flex flex-col gap-2"></div>
+            <button type="button" id="btn-poll-add" class="inline-flex h-11 min-h-11 items-center justify-center rounded-xl px-3 text-sm font-medium ring-1 ring-border">
+              Antwort hinzufügen
+            </button>
+            <p id="poll-error" class="hidden text-sm text-red-700 dark:text-red-200" role="alert"></p>
+            <button type="submit" id="btn-poll-send" class="inline-flex h-12 min-h-11 items-center justify-center rounded-xl bg-primary text-sm font-semibold text-primary-foreground hover:brightness-110">
+              Umfrage senden
+            </button>
+          </form>
         </section>
       </div>
     </div>
