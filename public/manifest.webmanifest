@@ -10,7 +10,7 @@
   "display": "standalone",
   "display_override": ["standalone", "minimal-ui", "browser"],
   "orientation": "portrait-primary",
-  "background_color": "#fffbf5",
+  "background_color": "#ffffff",
   "theme_color": "#fffbf5",
   "categories": ["social", "communication"],
   "icons": [
