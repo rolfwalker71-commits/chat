@@ -266,7 +266,26 @@ function parsePositiveInt(value) {
   return n;
 }
 
-function toPublicUser(row, { includeAdmin = false } = {}) {
+function isHexColor(value) {
+  return typeof value === "string" && /^#[0-9a-fA-F]{6}$/.test(value.trim());
+}
+
+function parseUiPrefs(raw) {
+  let obj = raw;
+  if (typeof raw === "string") {
+    try {
+      obj = JSON.parse(raw);
+    } catch {
+      obj = null;
+    }
+  }
+  const theme = obj && ["auto", "light", "dark"].includes(obj.theme) ? obj.theme : "auto";
+  const bubbleOwn = obj && isHexColor(obj.bubbleOwn) ? obj.bubbleOwn.trim().toLowerCase() : null;
+  const bubblePeer = obj && isHexColor(obj.bubblePeer) ? obj.bubblePeer.trim().toLowerCase() : null;
+  return { theme, bubbleOwn, bubblePeer };
+}
+
+function toPublicUser(row, { includeAdmin = false, includePrefs = false } = {}) {
   if (!row) return null;
   const user = {
     id: row.id,
@@ -278,6 +297,7 @@ function toPublicUser(row, { includeAdmin = false } = {}) {
     lastSeenAt: row.last_seen_at ? row.last_seen_at.toISOString() : null,
   };
   if (includeAdmin) user.isAdmin = Boolean(row.is_admin);
+  if (includePrefs) user.ui = parseUiPrefs(row.ui_prefs);
   return user;
 }
 
@@ -347,13 +367,13 @@ function likePattern(raw) {
   return `%${String(raw).replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_")}%`;
 }
 
-async function loadPublicUser(userId, { includeAdmin = false } = {}) {
+async function loadPublicUser(userId, { includeAdmin = false, includePrefs = false } = {}) {
   const { rows } = await pool.query(
-    `SELECT id, username, real_name, avatar_url, is_bot, is_admin, is_approved, last_seen_at
+    `SELECT id, username, real_name, avatar_url, is_bot, is_admin, is_approved, last_seen_at, ui_prefs
      FROM users WHERE id = $1`,
     [userId]
   );
-  return toPublicUser(rows[0], { includeAdmin });
+  return toPublicUser(rows[0], { includeAdmin, includePrefs });
 }
 
 async function loadUserAuthRow(userId) {
@@ -1173,6 +1193,8 @@ async function initDatabase() {
       ON push_subscriptions (user_id);
   `);
 
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ui_prefs JSONB NOT NULL DEFAULT '{}'::jsonb`);
+
   log("Datenbankschema ist bereit.");
 }
 
@@ -1430,7 +1452,7 @@ app.get("/health", async (_req, res) => {
 
 app.get("/api/me", requireAuth, async (req, res) => {
   try {
-    const user = await loadPublicUser(req.user.id, { includeAdmin: true });
+    const user = await loadPublicUser(req.user.id, { includeAdmin: true, includePrefs: true });
     if (!user) return sendError(res, 401, "Nicht angemeldet.");
     user.globalUnread = await countGlobalUnread(req.user.id);
     user.ai = aiStatusPayload();
@@ -1500,7 +1522,7 @@ app.post("/api/push/unsubscribe", requireAuth, async (req, res) => {
 
 app.patch("/api/me", requireAuth, async (req, res) => {
   try {
-    const current = await loadPublicUser(req.user.id);
+    const current = await loadPublicUser(req.user.id, { includePrefs: true });
     if (!current) return sendError(res, 401, "Nicht angemeldet.");
 
     let realName = current.realName;
@@ -1516,13 +1538,32 @@ app.patch("/api/me", requireAuth, async (req, res) => {
       }
     }
 
+    const prefs = parseUiPrefs(current.ui);
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, "theme")) {
+      const theme = String(req.body.theme || "").trim();
+      if (!["auto", "light", "dark"].includes(theme)) {
+        return sendError(res, 400, "Darstellung: automatisch, hell oder dunkel.");
+      }
+      prefs.theme = theme;
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, "bubbleOwn")) {
+      const raw = String(req.body.bubbleOwn || "").trim();
+      if (raw && !isHexColor(raw)) return sendError(res, 400, "Eigene Blasenfarbe muss #RRGGBB sein.");
+      prefs.bubbleOwn = raw ? raw.toLowerCase() : null;
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, "bubblePeer")) {
+      const raw = String(req.body.bubblePeer || "").trim();
+      if (raw && !isHexColor(raw)) return sendError(res, 400, "Empfangene Blasenfarbe muss #RRGGBB sein.");
+      prefs.bubblePeer = raw ? raw.toLowerCase() : null;
+    }
+
     const { rows } = await pool.query(
-      `UPDATE users SET real_name = $1, avatar_url = $2 WHERE id = $3
-       RETURNING id, username, real_name, avatar_url, is_bot, is_admin, is_approved, last_seen_at`,
-      [realName || null, avatarUrl || null, req.user.id]
+      `UPDATE users SET real_name = $1, avatar_url = $2, ui_prefs = $3::jsonb WHERE id = $4
+       RETURNING id, username, real_name, avatar_url, is_bot, is_admin, is_approved, last_seen_at, ui_prefs`,
+      [realName || null, avatarUrl || null, JSON.stringify(prefs), req.user.id]
     );
 
-    const user = toPublicUser(rows[0], { includeAdmin: true });
+    const user = toPublicUser(rows[0], { includeAdmin: true, includePrefs: true });
     refreshConnectionProfiles(user);
     io.emit("user:updated", user);
     return res.json(user);
@@ -2238,10 +2279,10 @@ app.post("/api/me/avatar", requireAuth, uploadLimiter, handleMulter, async (req,
     const avatarUrl = `/api/files/${saved.id}`;
     const { rows } = await pool.query(
       `UPDATE users SET avatar_url = $1 WHERE id = $2
-       RETURNING id, username, real_name, avatar_url, is_bot, is_admin, is_approved, last_seen_at`,
+       RETURNING id, username, real_name, avatar_url, is_bot, is_admin, is_approved, last_seen_at, ui_prefs`,
       [avatarUrl, req.user.id]
     );
-    const user = toPublicUser(rows[0], { includeAdmin: true });
+    const user = toPublicUser(rows[0], { includeAdmin: true, includePrefs: true });
     refreshConnectionProfiles(user);
     io.emit("user:updated", user);
     return res.json(user);

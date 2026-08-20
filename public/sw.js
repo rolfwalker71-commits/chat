@@ -1,5 +1,5 @@
 /* global self, caches, fetch, clients */
-const CACHE = "raum-shell-v3";
+const CACHE = "raum-shell-v4";
 const PRECACHE = [
   "/",
   "/index.html",

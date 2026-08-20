@@ -22,6 +22,12 @@
   const MAX_VOICE_MS = 60_000;
   const FILE_UUID = /^[0-9a-f-]{36}$/i;
   const ALLOWED_REACTIONS = ["👍", "❤️", "😂", "🎉", "😮", "😢"];
+  const UI_STORAGE_KEY = "raum-ui";
+  const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+  const BUBBLE_DEFAULTS = {
+    light: { own: "#fde68a", peer: "#ffffff" },
+    dark: { own: "#92400e", peer: "#27272a" },
+  };
 
   const viewAuth = document.getElementById("view-auth");
   const viewChat = document.getElementById("view-chat");
@@ -149,6 +155,11 @@
   const forwardBackdrop = document.getElementById("forward-backdrop");
   const btnForwardClose = document.getElementById("btn-forward-close");
   const forwardTargets = document.getElementById("forward-targets");
+  const bubbleOwnInput = document.getElementById("bubble-own");
+  const bubblePeerInput = document.getElementById("bubble-peer");
+  const btnBubbleReset = document.getElementById("btn-bubble-reset");
+  const themeColorMeta = document.getElementById("theme-color-meta");
+  const colorSchemeMeta = document.getElementById("color-scheme-meta");
 
   /** @type {"login" | "register" | "admin"} */
   let authMode = "login";
@@ -189,6 +200,9 @@
   let adminUsers = [];
   /** @type {"pending" | "all"} */
   let adminFilter = "pending";
+  const systemDarkMq = window.matchMedia("(prefers-color-scheme: dark)");
+  let uiPrefs = { theme: "auto", bubbleOwn: null, bubblePeer: null };
+  let uiSaveTimer = 0;
 
   let mediaRecorder = null;
   let recordChunks = [];
@@ -255,11 +269,11 @@
 
   function fillAvatar(container, user, sizeClass) {
     container.replaceChildren();
-    container.className = `${sizeClass} shrink-0 overflow-hidden rounded-full bg-zinc-800 ring-1 ring-border`;
+    container.className = `${sizeClass} shrink-0 overflow-hidden rounded-full bg-muted ring-1 ring-border`;
     const src = safeAvatarSrc(user?.avatarUrl);
     const initials = el(
       "span",
-      "flex h-full w-full items-center justify-center text-[0.65rem] font-semibold text-amber-400",
+      "flex h-full w-full items-center justify-center text-[0.65rem] font-semibold text-primary",
       getInitials(user)
     );
     if (!src) {
@@ -277,6 +291,147 @@
     });
     container.append(img);
   }
+
+  function normalizeUi(raw) {
+    const theme = raw && ["auto", "light", "dark"].includes(raw.theme) ? raw.theme : "auto";
+    const bubbleOwn = raw && HEX_COLOR.test(String(raw.bubbleOwn || "").trim())
+      ? String(raw.bubbleOwn).trim().toLowerCase()
+      : null;
+    const bubblePeer = raw && HEX_COLOR.test(String(raw.bubblePeer || "").trim())
+      ? String(raw.bubblePeer).trim().toLowerCase()
+      : null;
+    return { theme, bubbleOwn, bubblePeer };
+  }
+
+  function loadUiPrefs() {
+    try {
+      return normalizeUi(JSON.parse(localStorage.getItem(UI_STORAGE_KEY) || "{}"));
+    } catch {
+      return normalizeUi(null);
+    }
+  }
+
+  function saveUiPrefsLocal() {
+    try {
+      localStorage.setItem(UI_STORAGE_KEY, JSON.stringify(uiPrefs));
+    } catch {
+      // Quota / privater Modus — Darstellung bleibt nur in dieser Sitzung.
+    }
+  }
+
+  function hexToRgbChannels(hex) {
+    if (!HEX_COLOR.test(hex || "")) return null;
+    const n = Number.parseInt(hex.slice(1), 16);
+    return `${(n >> 16) & 255} ${(n >> 8) & 255} ${n & 255}`;
+  }
+
+  function contrastFg(hex) {
+    const rgb = hexToRgbChannels(hex);
+    if (!rgb) return "24 24 27";
+    const [r, g, b] = rgb.split(" ").map(Number);
+    const l = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+    return l > 0.55 ? "24 24 27" : "250 250 250";
+  }
+
+  function resolvedDark() {
+    return uiPrefs.theme === "dark" || (uiPrefs.theme !== "light" && systemDarkMq.matches);
+  }
+
+  function setBubbleVar(name, hex) {
+    const root = document.documentElement.style;
+    if (!hex) {
+      root.removeProperty(`--bubble-${name}`);
+      root.removeProperty(`--bubble-${name}-fg`);
+      return;
+    }
+    const rgb = hexToRgbChannels(hex);
+    if (!rgb) return;
+    root.setProperty(`--bubble-${name}`, rgb);
+    root.setProperty(`--bubble-${name}-fg`, contrastFg(hex));
+  }
+
+  function refreshThemePills() {
+    document.querySelectorAll(".theme-pill").forEach((btn) => {
+      const active = btn.getAttribute("data-theme") === uiPrefs.theme;
+      btn.className = `${pillClass(active)} theme-pill`;
+      btn.setAttribute("aria-checked", String(active));
+      btn.setAttribute("role", "radio");
+    });
+  }
+
+  function syncBubblePickers() {
+    const dark = document.documentElement.classList.contains("dark");
+    const defaults = dark ? BUBBLE_DEFAULTS.dark : BUBBLE_DEFAULTS.light;
+    if (bubbleOwnInput) bubbleOwnInput.value = uiPrefs.bubbleOwn || defaults.own;
+    if (bubblePeerInput) bubblePeerInput.value = uiPrefs.bubblePeer || defaults.peer;
+  }
+
+  function applyUi() {
+    const dark = resolvedDark();
+    document.documentElement.classList.toggle("dark", dark);
+    document.documentElement.dataset.theme = uiPrefs.theme;
+    if (themeColorMeta) {
+      const hex = getComputedStyle(document.documentElement).getPropertyValue("--theme-hex").trim();
+      themeColorMeta.setAttribute("content", hex || (dark ? "#09090b" : "#fafafa"));
+    }
+    if (colorSchemeMeta) {
+      colorSchemeMeta.setAttribute("content", uiPrefs.theme === "auto" ? "dark light" : uiPrefs.theme);
+    }
+    setBubbleVar("own", uiPrefs.bubbleOwn);
+    setBubbleVar("peer", uiPrefs.bubblePeer);
+    refreshThemePills();
+    syncBubblePickers();
+  }
+
+  function scheduleUiPersist() {
+    saveUiPrefsLocal();
+    applyUi();
+    if (!currentUser) return;
+    window.clearTimeout(uiSaveTimer);
+    uiSaveTimer = window.setTimeout(() => {
+      persistUiToServer().catch(() => {});
+    }, 400);
+  }
+
+  async function persistUiToServer() {
+    if (!currentUser) return;
+    const user = await api("/api/me", {
+      method: "PATCH",
+      body: JSON.stringify({
+        theme: uiPrefs.theme,
+        bubbleOwn: uiPrefs.bubbleOwn || "",
+        bubblePeer: uiPrefs.bubblePeer || "",
+      }),
+    });
+    currentUser = { ...currentUser, ...user };
+  }
+
+  function applyUserUi(user) {
+    const server = normalizeUi(user?.ui);
+    const localCustom = uiPrefs.theme !== "auto" || uiPrefs.bubbleOwn || uiPrefs.bubblePeer;
+    const serverEmpty = server.theme === "auto" && !server.bubbleOwn && !server.bubblePeer;
+    if (serverEmpty && localCustom) {
+      scheduleUiPersist();
+      return;
+    }
+    uiPrefs = server;
+    saveUiPrefsLocal();
+    applyUi();
+  }
+
+  function setThemePreference(theme) {
+    if (!["auto", "light", "dark"].includes(theme)) return;
+    uiPrefs.theme = theme;
+    scheduleUiPersist();
+  }
+
+  uiPrefs = loadUiPrefs();
+  applyUi();
+  const onSystemThemeChange = () => {
+    if (uiPrefs.theme === "auto") applyUi();
+  };
+  if (systemDarkMq.addEventListener) systemDarkMq.addEventListener("change", onSystemThemeChange);
+  else systemDarkMq.addListener(onSystemThemeChange);
 
   function setAuthMode(mode) {
     authMode = mode;
@@ -307,7 +462,7 @@
     const base =
       "inline-flex h-full min-h-0 max-h-full flex-1 items-center justify-center rounded-full px-2 text-xs font-medium leading-none sm:px-3 sm:text-sm";
     return active
-      ? `${base} text-foreground shadow-sm shadow-black/40 bg-background`
+      ? `${base} text-foreground shadow-sm bg-background`
       : `${base} text-muted-foreground`;
   }
 
@@ -474,6 +629,7 @@
       currentUser = await api("/api/me");
       aiStatus = currentUser.ai || null;
       setGlobalUnread(currentUser.globalUnread || 0);
+      applyUserUi(currentUser);
       showChat();
       await loadConversations();
       connectSocket();
@@ -525,6 +681,7 @@
       currentUser = { ...currentUser, ...me };
       aiStatus = me.ai || null;
       setGlobalUnread(me.globalUnread || 0);
+      applyUserUi(currentUser);
       formAuth.reset();
       await loadConversations();
       connectSocket();
@@ -652,9 +809,9 @@
         text.append(el("p", "mt-1 text-xs text-muted-foreground", `Registriert ${formatTime(user.createdAt)}`));
       }
       const badgeClass = user.isAdmin
-        ? "bg-amber-500/20 text-amber-400"
+        ? "bg-primary/15 text-primary"
         : user.isApproved
-          ? "bg-emerald-500/15 text-emerald-300"
+          ? "bg-emerald-500/15 text-emerald-800 dark:text-emerald-300"
           : "bg-muted text-muted-foreground";
       const badge = el(
         "span",
@@ -666,7 +823,7 @@
       if (!user.isApproved) {
         const approve = el(
           "button",
-          "inline-flex h-11 min-h-11 items-center rounded-xl bg-amber-500 px-3 text-sm font-semibold text-zinc-950 hover:bg-amber-400",
+          "inline-flex h-11 min-h-11 items-center rounded-xl bg-primary px-3 text-sm font-semibold text-primary-foreground hover:brightness-110",
           "Freigeben"
         );
         approve.type = "button";
@@ -675,7 +832,7 @@
       } else if (!user.isAdmin && currentUser && user.id !== currentUser.id) {
         const revoke = el(
           "button",
-          "inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-sm font-medium text-red-200 ring-1 ring-red-900 hover:bg-red-950/60",
+          "inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-sm font-medium text-red-700 ring-1 ring-red-200 hover:bg-red-100 dark:text-red-200 dark:ring-red-900 dark:hover:bg-red-950/60",
           "Sperren"
         );
         revoke.type = "button";
@@ -1207,7 +1364,7 @@
         "button",
         `flex h-11 min-h-11 w-full items-center rounded-xl px-3 text-left text-sm font-medium ${
           item.danger
-            ? "text-red-200 hover:bg-red-950/60"
+            ? "text-red-700 hover:bg-red-100 dark:text-red-200 dark:hover:bg-red-950/60"
             : "text-foreground hover:bg-muted"
         }`,
         item.label
@@ -1274,7 +1431,7 @@
 
     const moreBtn = el(
       "button",
-      `absolute top-1 hidden h-11 w-11 items-center justify-center rounded-full text-lg leading-none text-muted-foreground hover:bg-zinc-950 hover:text-foreground md:inline-flex md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100 ${
+      `absolute top-1 hidden h-11 w-11 items-center justify-center rounded-full text-lg leading-none text-muted-foreground hover:bg-muted hover:text-foreground md:inline-flex md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100 ${
         currentUser && message.userId === currentUser.id ? "left-1" : "right-1"
       }`
     );
@@ -1370,7 +1527,7 @@
       const btn = el(
         "button",
         `inline-flex h-11 min-h-11 items-center gap-1 rounded-full px-3 text-sm ${
-          reaction.mine ? "bg-amber-500/20 text-foreground" : "bg-muted text-foreground"
+          reaction.mine ? "bg-primary/20 text-foreground" : "bg-muted text-foreground"
         }`
       );
       btn.type = "button";
@@ -1406,18 +1563,18 @@
       "div",
       `w-full px-3 py-2 leading-snug ${
         message.deleted
-          ? "rounded-2xl bg-zinc-900/70 text-muted-foreground ring-1 ring-border"
+          ? "rounded-2xl bg-muted text-muted-foreground ring-1 ring-border"
           : mine
-            ? "rounded-2xl rounded-br-md bg-primary/20 text-foreground"
-            : "rounded-2xl rounded-bl-md bg-card text-foreground ring-1 ring-border/60"
+            ? "rounded-2xl rounded-br-md"
+            : "rounded-2xl rounded-bl-md ring-1 ring-border/60"
       }`
     );
-    bubble.setAttribute("data-bubble", "");
+    if (!message.deleted) bubble.setAttribute("data-bubble", mine ? "own" : "peer");
 
     if (!mine) {
       const meta = el("div", "mb-0.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5");
       meta.append(
-        el("span", "text-sm font-semibold break-words text-amber-400", displayName(message))
+        el("span", "text-sm font-semibold break-words text-primary", displayName(message))
       );
       bubble.append(meta);
     }
@@ -1425,13 +1582,13 @@
     if (message.replyTo) {
       const quote = el(
         "button",
-        "mb-2 w-full rounded-xl bg-zinc-950/60 px-3 py-2 text-left ring-1 ring-border hover:bg-zinc-950"
+        "mb-2 w-full rounded-xl bg-background/60 px-3 py-2 text-left ring-1 ring-border hover:bg-background"
       );
       quote.type = "button";
       quote.append(
         el(
           "p",
-          "text-xs font-medium text-amber-400",
+          "text-xs font-medium text-primary",
           message.replyTo.deleted ? "Gelöschte Nachricht" : displayName(message.replyTo)
         ),
         el(
@@ -1484,7 +1641,7 @@
         link.target = "_blank";
         link.rel = "noopener noreferrer";
         link.className =
-          "mt-2 inline-flex h-11 min-h-11 items-center rounded-xl bg-amber-500 px-3 text-sm font-semibold text-zinc-950 hover:bg-amber-400";
+          "mt-2 inline-flex h-11 min-h-11 items-center rounded-xl bg-primary px-3 text-sm font-semibold text-primary-foreground hover:brightness-110";
         link.textContent = message.file.name || "Datei öffnen";
         bubble.append(link);
         if (message.content && message.content !== "Datei") {
@@ -1494,7 +1651,7 @@
         const lat = Number(message.location.lat);
         const lng = Number(message.location.lng);
         if (Number.isFinite(lat) && Number.isFinite(lng)) {
-          const card = el("div", "mt-1 rounded-xl bg-zinc-950/60 p-3 ring-1 ring-border");
+          const card = el("div", "mt-1 rounded-xl bg-background/60 p-3 ring-1 ring-border");
           card.append(el("p", "text-sm font-medium", "Standort"));
           card.append(
             el(
@@ -1517,7 +1674,7 @@
           link.target = "_blank";
           link.rel = "noopener noreferrer";
           link.className =
-            "mt-3 inline-flex h-11 min-h-11 items-center rounded-xl bg-amber-500 px-3 text-sm font-semibold text-zinc-950 hover:bg-amber-400";
+            "mt-3 inline-flex h-11 min-h-11 items-center rounded-xl bg-primary px-3 text-sm font-semibold text-primary-foreground hover:brightness-110";
           link.textContent = "In OpenStreetMap öffnen";
           card.append(link);
           bubble.append(card);
@@ -1535,7 +1692,7 @@
     bubble.append(
       el(
         "time",
-        `mt-1 block text-right text-[0.7rem] leading-none ${mine ? "text-amber-200/70" : "text-muted-foreground"}`,
+        "mt-1 block text-right text-[0.7rem] leading-none",
         formatListTime(message.createdAt)
       )
     );
@@ -1613,9 +1770,9 @@
     const dots = el("span", "mr-2 inline-flex gap-0.5 align-middle", "");
     dots.setAttribute("aria-hidden", "true");
     dots.append(
-      el("span", "typing-dot inline-block h-1.5 w-1.5 rounded-full bg-amber-400"),
-      el("span", "typing-dot inline-block h-1.5 w-1.5 rounded-full bg-amber-400"),
-      el("span", "typing-dot inline-block h-1.5 w-1.5 rounded-full bg-amber-400")
+      el("span", "typing-dot inline-block h-1.5 w-1.5 rounded-full bg-primary"),
+      el("span", "typing-dot inline-block h-1.5 w-1.5 rounded-full bg-primary"),
+      el("span", "typing-dot inline-block h-1.5 w-1.5 rounded-full bg-primary")
     );
     typingIndicator.append(dots, el("span", "", `${text}…`));
     typingIndicator.classList.remove("hidden");
@@ -1639,7 +1796,7 @@
     const n = count > 99 ? "99+" : String(count);
     return el(
       "span",
-      "ml-auto shrink-0 min-w-6 rounded-full bg-amber-500 px-2 py-0.5 text-center text-xs font-semibold text-zinc-950",
+      "ml-auto shrink-0 min-w-6 rounded-full bg-primary px-2 py-0.5 text-center text-xs font-semibold text-primary-foreground",
       n
     );
   }
@@ -1952,7 +2109,10 @@
 
   function setMorePanel(open) {
     setOverlay(moreOverlay, open);
-    if (open) refreshNotifyButtons();
+    if (open) {
+      refreshNotifyButtons();
+      refreshThemePills();
+    }
   }
 
   function setOnlinePanel(_open) {
@@ -1970,6 +2130,8 @@
       showError(profileError, "");
       showError(profileOk, "");
       fillAvatar(profileAvatarPreview, currentUser, "h-16 w-16");
+      refreshThemePills();
+      syncBubblePickers();
       btnProfileClose.focus();
     }
   }
@@ -2152,6 +2314,11 @@
       if (!user?.id) return;
       if (currentUser && user.id === currentUser.id) {
         currentUser = { ...currentUser, ...user };
+        if (user.ui) {
+          uiPrefs = normalizeUi(user.ui);
+          saveUiPrefsLocal();
+          applyUi();
+        }
         refreshSelfUi();
       }
       for (const conv of conversations) {
@@ -2472,8 +2639,17 @@
         body: JSON.stringify({
           realName: profileRealname.value,
           avatarUrl: profileAvatarUrl.value.trim(),
+          theme: uiPrefs.theme,
+          bubbleOwn: uiPrefs.bubbleOwn || "",
+          bubblePeer: uiPrefs.bubblePeer || "",
         }),
       });
+      window.clearTimeout(uiSaveTimer);
+      if (currentUser.ui) {
+        uiPrefs = normalizeUi(currentUser.ui);
+        saveUiPrefsLocal();
+      }
+      applyUi();
       refreshSelfUi();
       showError(profileOk, "Profil gespeichert.");
     } catch (err) {
@@ -2548,7 +2724,7 @@
         );
         btn.type = "button";
         btn.append(
-          el("span", "text-xs text-amber-400", item.roomLabel || "Chat"),
+          el("span", "text-xs text-primary", item.roomLabel || "Chat"),
           el("span", "text-sm font-medium text-foreground", displayName(message)),
           el("span", "line-clamp-2 break-words text-sm text-muted-foreground", previewText(message)),
           el("span", "text-xs text-muted-foreground", formatTime(message.createdAt))
@@ -2596,6 +2772,28 @@
   btnProfileClose.addEventListener("click", () => setProfilePanel(false));
   profileBackdrop.addEventListener("click", () => setProfilePanel(false));
   formProfile.addEventListener("submit", handleProfileSubmit);
+  document.querySelectorAll(".theme-pill").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      setThemePreference(btn.getAttribute("data-theme"));
+    });
+  });
+  function onBubbleColorInput(kind, input) {
+    if (!input) return;
+    input.addEventListener("input", () => {
+      const hex = String(input.value || "").toLowerCase();
+      if (!HEX_COLOR.test(hex)) return;
+      if (kind === "own") uiPrefs.bubbleOwn = hex;
+      else uiPrefs.bubblePeer = hex;
+      scheduleUiPersist();
+    });
+  }
+  onBubbleColorInput("own", bubbleOwnInput);
+  onBubbleColorInput("peer", bubblePeerInput);
+  btnBubbleReset?.addEventListener("click", () => {
+    uiPrefs.bubbleOwn = null;
+    uiPrefs.bubblePeer = null;
+    scheduleUiPersist();
+  });
   btnAttach.addEventListener("click", () => setAttachTray(attachTray.hidden));
   messageList.addEventListener("click", () => setAttachTray(false));
   btnAttachImage.addEventListener("click", () => {
