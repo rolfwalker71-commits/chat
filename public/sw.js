@@ -1,5 +1,5 @@
 /* global self, caches, fetch, clients */
-const CACHE = "mychat-shell-v24";
+const CACHE = "mychat-shell-v25";
 const PRECACHE = [
   "/",
   "/index.html",

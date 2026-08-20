@@ -2641,7 +2641,7 @@
     userList.replaceChildren();
     for (const user of users) {
       const isSelf = currentUser && user.id === currentUser.id;
-      const item = el("li", "overflow-hidden rounded-2xl bg-card shadow-lg shadow-black/10 ring-1 ring-border");
+      const item = el("li", "overflow-hidden rounded-2xl bg-card ring-1 ring-border");
       const btn = el(
         "button",
         "flex min-h-14 w-full items-center gap-3 rounded-2xl px-3 py-2 text-left hover:bg-muted whitespace-normal"

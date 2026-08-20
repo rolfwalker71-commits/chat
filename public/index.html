@@ -285,16 +285,10 @@
         touch-action: pan-y;
         border-radius: 1rem;
         background-color: rgb(var(--card));
-        box-shadow:
-          0 0 0 1px rgb(var(--border)),
-          0 10px 15px -3px rgb(0 0 0 / 0.1),
-          0 4px 6px -4px rgb(0 0 0 / 0.1);
+        box-shadow: 0 0 0 1px rgb(var(--border));
       }
       .conv-swipe.is-selected {
-        box-shadow:
-          0 0 0 1px rgb(var(--primary)),
-          0 10px 15px -3px rgb(0 0 0 / 0.1),
-          0 4px 6px -4px rgb(0 0 0 / 0.1);
+        box-shadow: 0 0 0 1px rgb(var(--primary));
       }
       button.conv-action {
         position: absolute;
@@ -655,7 +649,7 @@
             class="nav-dock shrink-0 lg:hidden"
             aria-label="Hauptnavigation"
           >
-            <div class="flex rounded-2xl bg-card p-1.5 shadow-lg shadow-black/10 ring-1 ring-border">
+            <div class="flex rounded-2xl bg-card p-1.5 ring-1 ring-border">
               <button
                 type="button"
                 id="nav-chats"
