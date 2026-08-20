@@ -4,8 +4,19 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#09090b" />
-    <meta name="description" content="Gemeinsamer Echtzeit-Chatraum mit privaten Nachrichten" />
-    <title>Raum — Chat</title>
+    <meta name="color-scheme" content="dark" />
+    <meta name="description" content="Gemeinsamer Echtzeit-Chat mit privaten Nachrichten" />
+    <meta name="application-name" content="Raum" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Raum" />
+    <title>Raum</title>
+
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
 
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -39,18 +50,36 @@
     </script>
 
     <style>
-      html,
-      body {
-        background-color: #09090b;
-        color: #fafafa;
+      :root {
+        --app-height: 100dvh;
       }
 
-      .bg-grid {
+      html,
+      body {
+        height: var(--app-height);
+        background-color: #09090b;
+        color: #fafafa;
+        overscroll-behavior: none;
+        touch-action: manipulation;
+      }
+
+      .safe-t {
+        padding-top: max(0.5rem, env(safe-area-inset-top));
+      }
+      .safe-b {
+        padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+      }
+      .safe-x {
+        padding-left: max(0.75rem, env(safe-area-inset-left));
+        padding-right: max(0.75rem, env(safe-area-inset-right));
+      }
+
+      .chat-wallpaper {
+        background-color: #09090b;
         background-image:
-          radial-gradient(ellipse 80% 50% at 50% -10%, rgba(217, 119, 6, 0.14), transparent),
-          linear-gradient(to right, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
-          linear-gradient(to bottom, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
-        background-size: auto, 48px 48px, 48px 48px;
+          radial-gradient(ellipse 80% 40% at 50% -8%, rgba(217, 119, 6, 0.12), transparent 55%),
+          radial-gradient(rgba(255, 255, 255, 0.035) 0.7px, transparent 0.8px);
+        background-size: auto, 18px 18px;
       }
 
       .msg-list::-webkit-scrollbar,
@@ -160,7 +189,7 @@
       }
     </style>
   </head>
-  <body class="h-full min-h-dvh bg-background font-sans antialiased bg-grid">
+  <body class="h-full min-h-0 overflow-hidden bg-background font-sans antialiased">
     <a
       href="#main"
       class="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-lg focus:bg-primary focus:px-4 focus:py-2 focus:text-primary-foreground"
@@ -171,13 +200,17 @@
     <!-- ===================================================================
          Ansicht: Login / Registrierung
          =================================================================== -->
-    <div id="view-auth" class="flex min-h-dvh items-center justify-center px-4 py-8 sm:px-6">
+    <div id="view-auth" class="flex min-h-full items-center justify-center overflow-y-auto px-4 py-8 safe-t safe-b sm:px-6">
       <main id="main" class="w-full max-w-md">
         <header class="mb-8 text-center">
-          <p class="mb-3 text-sm font-medium uppercase tracking-[0.2em] text-amber-500/90">Raum</p>
-          <h1 class="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
-            Gemeinsamer Chat
-          </h1>
+          <img
+            src="/icons/logo.png"
+            alt=""
+            width="96"
+            height="96"
+            class="mx-auto mb-5 h-24 w-24"
+          />
+          <h1 class="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">Raum</h1>
           <p class="mt-3 text-base leading-relaxed text-muted-foreground">
             Anmelden, Konto anlegen oder als Admin die Benutzerverwaltung öffnen.
           </p>
@@ -284,7 +317,7 @@
             <button
               type="submit"
               id="auth-submit"
-              class="mt-1 inline-flex h-12 min-h-11 w-full items-center justify-center rounded-xl bg-amber-500 px-4 text-base font-semibold text-zinc-950 hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
+              class="mt-1 inline-flex h-12 min-h-11 w-full items-center justify-center rounded-xl bg-primary px-4 text-base font-semibold text-primary-foreground hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
             >
               Anmelden
             </button>
@@ -294,412 +327,379 @@
     </div>
 
     <!-- ===================================================================
-         Ansicht: Chatraum (nach Login)
+         Ansicht: Chat (WhatsApp-ähnlich: Liste | Thread)
          =================================================================== -->
-    <div id="view-chat" class="hidden h-dvh flex-col">
-      <header
-        class="flex min-h-14 shrink-0 flex-wrap items-center gap-2 border-b border-border bg-zinc-950/80 px-3 py-2 backdrop-blur-md sm:px-4"
-      >
-        <button
-          type="button"
-          id="btn-nav"
-          class="inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-sm font-medium text-foreground ring-1 ring-border hover:bg-muted lg:hidden"
-          aria-expanded="false"
-          aria-controls="nav-panel"
-        >
-          Chats
-        </button>
-
-        <div class="min-w-0 flex-1">
-          <p id="room-kicker" class="text-xs font-medium uppercase tracking-[0.18em] text-amber-500">
-            Raum
-          </p>
-          <h1 id="room-title" class="break-words text-lg font-semibold leading-snug text-foreground">
-            Globaler Chat
-          </h1>
-          <p id="room-status" class="text-xs leading-snug text-muted-foreground"></p>
-        </div>
-
-        <button
-          type="button"
-          id="btn-search"
-          class="inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-sm font-medium text-foreground ring-1 ring-border hover:bg-muted"
-          aria-haspopup="dialog"
-          aria-controls="search-overlay"
-        >
-          Suche
-        </button>
-
-        <button
-          type="button"
-          id="btn-chat-menu"
-          class="inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-sm font-medium text-muted-foreground ring-1 ring-border hover:bg-muted hover:text-foreground"
-          aria-haspopup="menu"
-          aria-expanded="false"
-          aria-controls="chat-menu"
-        >
-          Mehr
-        </button>
-
-        <button
-          type="button"
-          id="btn-admin"
-          class="hidden h-11 min-h-11 items-center gap-2 rounded-xl px-3 text-sm font-medium text-foreground ring-1 ring-border hover:bg-muted"
-          aria-label="Benutzerverwaltung"
-        >
-          Verwaltung
-          <span
-            id="admin-pending-badge"
-            class="hidden min-w-6 rounded-full bg-amber-500 px-2 py-0.5 text-center text-xs font-semibold text-zinc-950"
-          ></span>
-        </button>
-
-        <button
-          type="button"
-          id="btn-profile"
-          class="inline-flex h-11 min-h-11 items-center gap-2 rounded-full bg-muted px-2 pr-3 text-sm font-medium text-foreground"
-          aria-haspopup="dialog"
-          aria-controls="profile-overlay"
-        >
-          <span id="header-avatar" class="inline-flex h-8 w-8 shrink-0 overflow-hidden rounded-full bg-zinc-800"></span>
-          <span id="label-username" class="hidden max-w-[8rem] break-words sm:inline"> </span>
-        </button>
-
-        <button
-          type="button"
-          id="btn-online"
-          class="inline-flex h-11 min-h-11 items-center gap-2 rounded-full bg-muted px-3 text-sm font-medium text-foreground lg:hidden"
-          aria-expanded="false"
-          aria-controls="online-panel"
-        >
-          <span class="inline-block h-2.5 w-2.5 rounded-full bg-emerald-400" aria-hidden="true"></span>
-          <span id="online-count-mobile">0 online</span>
-        </button>
-
-        <button
-          type="button"
-          id="btn-logout"
-          class="inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-sm font-medium text-muted-foreground ring-1 ring-border hover:bg-muted hover:text-foreground"
-        >
-          Abmelden
-        </button>
-      </header>
-
+    <div id="view-chat" class="hidden h-full flex-col overflow-hidden">
       <div class="flex min-h-0 flex-1">
-        <!-- Desktop: Unterhaltungen -->
         <aside
-          id="nav-desktop"
-          class="user-list hidden w-72 shrink-0 flex-col overflow-hidden border-r border-border bg-zinc-950/60 lg:flex"
-          aria-label="Unterhaltungen"
+          id="pane-list"
+          class="flex min-h-0 w-full flex-col bg-background lg:w-[min(26rem,38vw)] lg:border-r lg:border-border"
+          aria-label="Chats"
         >
-          <div class="border-b border-border p-4">
-            <h2 class="text-sm font-semibold text-foreground">Unterhaltungen</h2>
-            <p class="mt-1 text-xs leading-snug text-muted-foreground">
-              Globaler Raum oder privat mit registrierten Nutzerinnen und Nutzern.
+          <header class="safe-t safe-x flex min-h-14 shrink-0 items-center gap-2 border-b border-border bg-card px-2 py-1.5">
+            <img src="/icons/logo.png" alt="" width="36" height="36" class="h-9 w-9 shrink-0" />
+            <div class="min-w-0 flex-1">
+              <h1 class="break-words text-lg font-semibold leading-snug text-foreground">Chats</h1>
+            </div>
+            <button
+              type="button"
+              id="btn-search"
+              class="inline-flex h-11 w-11 min-h-11 items-center justify-center rounded-full text-foreground hover:bg-muted"
+              aria-label="Nachrichten suchen"
+              aria-haspopup="dialog"
+              aria-controls="search-overlay"
+            >
+              <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="11" cy="11" r="7" />
+                <path d="m20 20-3-3" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              id="btn-new-chat"
+              class="inline-flex h-11 w-11 min-h-11 items-center justify-center rounded-full text-foreground hover:bg-muted"
+              aria-label="Neuer Chat"
+              aria-haspopup="dialog"
+              aria-controls="new-chat-overlay"
+            >
+              <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 5v14" />
+                <path d="M5 12h14" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              id="btn-more"
+              class="inline-flex h-11 w-11 min-h-11 items-center justify-center rounded-full text-foreground hover:bg-muted"
+              aria-label="Mehr"
+              aria-haspopup="dialog"
+              aria-controls="more-overlay"
+            >
+              <span id="header-avatar" class="inline-flex h-8 w-8 shrink-0 overflow-hidden rounded-full bg-muted"></span>
+            </button>
+          </header>
+
+          <div
+            id="list-tabs"
+            class="safe-x mx-3 mt-3 hidden h-14 min-h-14 rounded-full bg-muted p-1.5 lg:flex"
+            role="tablist"
+            aria-label="Listenansicht"
+          >
+            <button
+              type="button"
+              id="tab-list-chats"
+              role="tab"
+              aria-selected="true"
+              class="h-full min-h-0 max-h-full flex-1 rounded-full px-3 text-sm font-medium leading-none text-foreground shadow-sm shadow-black/40 bg-background"
+            >
+              Chats
+            </button>
+            <button
+              type="button"
+              id="tab-list-contacts"
+              role="tab"
+              aria-selected="false"
+              class="h-full min-h-0 max-h-full flex-1 rounded-full px-3 text-sm font-medium leading-none text-muted-foreground"
+            >
+              Kontakte
+            </button>
+          </div>
+
+          <div id="screen-chats" class="user-list flex min-h-0 flex-1 flex-col overflow-y-auto">
+            <ul id="conv-list" class="flex flex-col px-1 py-1" role="list"></ul>
+          </div>
+
+          <div id="screen-contacts" class="user-list hidden min-h-0 flex-1 flex-col overflow-y-auto px-2 py-2">
+            <p class="px-3 py-2 text-sm leading-relaxed text-muted-foreground">
+              Online
+              <span id="online-count" class="font-medium text-foreground">(0)</span>
             </p>
+            <ul id="user-list" class="flex flex-col gap-1"></ul>
           </div>
-          <div class="flex min-h-0 flex-1 flex-col overflow-y-auto p-3">
+
+          <nav
+            id="list-nav"
+            class="safe-b safe-x flex shrink-0 border-t border-border bg-card px-2 pt-1 lg:hidden"
+            aria-label="Hauptnavigation"
+          >
             <button
               type="button"
-              id="btn-global-desktop"
-              class="mb-3 flex min-h-11 w-full items-center gap-3 rounded-xl bg-amber-500/15 px-3 py-2 text-left ring-1 ring-amber-500/30"
+              id="nav-chats"
+              class="flex h-auto min-h-11 flex-1 flex-col items-center justify-center gap-0.5 py-1 text-foreground"
+              aria-current="page"
             >
-              <span
-                class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-500/20 text-xs font-semibold text-amber-400"
-                aria-hidden="true"
-                >G</span
-              >
-              <span class="min-w-0">
-                <span class="block text-sm font-medium text-foreground">Globaler Chat</span>
-                <span class="block text-xs text-muted-foreground">Für alle</span>
-              </span>
-              <span
-                id="global-unread-desktop"
-                class="ml-auto hidden min-w-6 rounded-full bg-amber-500 px-2 py-0.5 text-center text-xs font-semibold text-zinc-950"
-              ></span>
+              <svg class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M7 8h10" />
+                <path d="M7 12h6" />
+                <path d="M21 15a2 2 0 0 1-2 2H8l-5 3V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+              </svg>
+              <span class="text-xs font-medium leading-snug">Chats</span>
             </button>
             <button
               type="button"
-              id="btn-assistant-desktop"
-              class="mb-3 flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-2 text-left ring-1 ring-border hover:bg-muted"
+              id="nav-contacts"
+              class="flex h-auto min-h-11 flex-1 flex-col items-center justify-center gap-0.5 py-1 text-muted-foreground"
             >
-              <span
-                class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-500/20 text-xs font-semibold text-amber-400"
-                aria-hidden="true"
-                >AI</span
-              >
-              <span class="min-w-0">
-                <span class="block text-sm font-medium text-foreground">Assistent raum</span>
-                <span class="block text-xs text-muted-foreground">Hilfe und Kurzfassung</span>
-              </span>
+              <svg class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+                <circle cx="9" cy="7" r="4" />
+                <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+                <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+              </svg>
+              <span class="text-xs font-medium leading-snug">Kontakte</span>
             </button>
-            <ul id="conv-list-desktop" class="flex flex-col gap-1"></ul>
-          </div>
-          <form id="form-user-search-desktop" class="shrink-0 border-t border-border p-3">
-            <label for="user-search-desktop" class="text-xs font-medium text-muted-foreground">
-              Neue Unterhaltung
-            </label>
-            <input
-              id="user-search-desktop"
-              type="search"
-              autocomplete="off"
-              maxlength="64"
-              placeholder="Namen suchen…"
-              class="mt-2 h-11 w-full rounded-xl bg-zinc-900 px-3 text-sm text-foreground ring-1 ring-border placeholder:text-zinc-500"
-            />
-            <ul id="search-picked-desktop" class="mt-2 flex flex-wrap gap-1"></ul>
-            <ul id="user-search-results-desktop" class="mt-2 flex flex-col gap-1"></ul>
             <button
-              type="submit"
-              id="btn-start-chat-desktop"
-              class="mt-2 hidden h-11 min-h-11 w-full items-center justify-center rounded-xl bg-amber-500 text-sm font-semibold text-zinc-950 hover:bg-amber-400"
+              type="button"
+              id="nav-more"
+              class="flex h-auto min-h-11 flex-1 flex-col items-center justify-center gap-0.5 py-1 text-muted-foreground"
             >
-              Chat starten
+              <svg class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="1" />
+                <circle cx="19" cy="12" r="1" />
+                <circle cx="5" cy="12" r="1" />
+              </svg>
+              <span class="text-xs font-medium leading-snug">Mehr</span>
             </button>
-          </form>
+          </nav>
         </aside>
 
-        <section class="flex min-w-0 flex-1 flex-col" aria-label="Nachrichten" id="chat-main">
+        <section id="pane-thread" class="hidden min-h-0 min-w-0 flex-1 flex-col bg-background lg:flex" aria-label="Unterhaltung">
           <div
-            id="message-list"
-            class="msg-list flex flex-1 flex-col gap-3 overflow-y-auto px-4 py-4 sm:px-6"
-            role="log"
-            aria-live="polite"
-            aria-relevant="additions"
-          ></div>
-
-          <p
-            id="typing-indicator"
-            class="hidden shrink-0 px-4 pb-2 text-sm text-muted-foreground sm:px-6"
-            aria-live="polite"
-          ></p>
-
-          <p
-            id="pending-banner"
-            class="hidden shrink-0 border-t border-border bg-zinc-950/90 px-4 py-4 text-sm leading-relaxed text-muted-foreground sm:px-6"
-            role="status"
+            id="thread-empty"
+            class="hidden min-h-0 flex-1 flex-col items-center justify-center gap-4 px-6 text-center lg:flex"
           >
-            Dein Konto wartet auf Freigabe durch einen Admin. Du kannst mitlesen, aber noch nichts senden.
-          </p>
+            <img src="/icons/logo.png" alt="" width="96" height="96" class="h-24 w-24" />
+            <h2 class="text-xl font-semibold text-foreground">Raum</h2>
+            <p class="max-w-sm text-sm leading-relaxed text-muted-foreground">
+              Wähle links einen Chat, um die Unterhaltung zu öffnen.
+            </p>
+          </div>
 
-          <form
-            id="form-message"
-            class="shrink-0 border-t border-border bg-zinc-950/90 px-4 py-3 sm:px-6"
-          >
-            <p
-              id="chat-error"
-              class="mb-2 hidden rounded-lg bg-red-950/80 px-3 py-2 text-sm text-red-200"
-              role="alert"
-            ></p>
-
-            <div
-              id="reply-bar"
-              class="mb-2 hidden items-start justify-between gap-3 rounded-xl bg-zinc-900 px-3 py-2 ring-1 ring-amber-500/30"
-            >
-              <div class="min-w-0">
-                <p class="text-xs font-medium text-amber-400">Antwort an <span id="reply-author"></span></p>
-                <p id="reply-preview" class="mt-0.5 line-clamp-2 break-words text-sm text-muted-foreground"></p>
+          <div id="thread-active" class="hidden min-h-0 flex-1 flex-col">
+            <header class="safe-t safe-x flex min-h-14 shrink-0 items-center gap-1 border-b border-border bg-card px-1 py-1.5 sm:px-2">
+              <button
+                type="button"
+                id="btn-back"
+                class="inline-flex h-11 w-11 min-h-11 items-center justify-center rounded-full text-foreground hover:bg-muted lg:hidden"
+                aria-label="Zurück zu den Chats"
+              >
+                <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="m15 18-6-6 6-6" />
+                </svg>
+              </button>
+              <div id="thread-avatar" class="h-10 w-10 shrink-0 overflow-hidden rounded-full bg-muted"></div>
+              <div class="min-w-0 flex-1 px-2">
+                <h2 id="room-title" class="break-words text-base font-semibold leading-snug text-foreground">
+                  Chat
+                </h2>
+                <p id="room-status" class="text-xs leading-snug text-muted-foreground"></p>
               </div>
               <button
                 type="button"
-                id="btn-reply-cancel"
-                class="inline-flex h-11 min-h-11 shrink-0 items-center rounded-xl px-3 text-sm ring-1 ring-border"
+                id="btn-chat-menu"
+                class="inline-flex h-11 w-11 min-h-11 items-center justify-center rounded-full text-foreground hover:bg-muted"
+                aria-label="Chat-Menü"
+                aria-haspopup="menu"
+                aria-expanded="false"
+                aria-controls="chat-menu"
               >
-                Abbrechen
+                <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <circle cx="12" cy="12" r="1" />
+                  <circle cx="12" cy="5" r="1" />
+                  <circle cx="12" cy="19" r="1" />
+                </svg>
               </button>
-            </div>
-
-            <div id="ai-suggestions" class="mb-2 hidden flex-wrap gap-2" hidden></div>
+            </header>
 
             <div
-              id="record-bar"
-              class="mb-2 hidden items-center justify-between gap-3 rounded-xl bg-red-950/50 px-3 py-2 ring-1 ring-red-900"
+              id="message-list"
+              class="msg-list chat-wallpaper flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-3 py-3 sm:px-6"
+              role="log"
+              aria-live="polite"
+              aria-relevant="additions"
+            ></div>
+
+            <p
+              id="typing-indicator"
+              class="hidden shrink-0 bg-background px-4 pb-1 text-sm text-muted-foreground sm:px-6"
+              aria-live="polite"
+            ></p>
+
+            <p
+              id="pending-banner"
+              class="hidden shrink-0 border-t border-border bg-card px-4 py-4 text-sm leading-relaxed text-muted-foreground sm:px-6"
               role="status"
             >
-              <p class="flex items-center gap-2 text-sm text-red-100">
-                <span class="rec-dot inline-block h-2.5 w-2.5 rounded-full bg-red-400" aria-hidden="true"></span>
-                Aufnahme
-                <span id="record-timer">0:00</span>
-              </p>
-              <div class="flex gap-2">
+              Dein Konto wartet auf Freigabe durch einen Admin. Du kannst mitlesen, aber noch nichts senden.
+            </p>
+
+            <form id="form-message" class="safe-b safe-x shrink-0 border-t border-border bg-card px-2 py-2 sm:px-4">
+              <p
+                id="chat-error"
+                class="mb-2 hidden rounded-lg bg-red-950/80 px-3 py-2 text-sm text-red-200"
+                role="alert"
+              ></p>
+
+              <div
+                id="reply-bar"
+                class="mb-2 hidden items-start justify-between gap-3 rounded-xl bg-zinc-900 px-3 py-2 ring-1 ring-primary/30"
+              >
+                <div class="min-w-0">
+                  <p class="text-xs font-medium text-amber-400">Antwort an <span id="reply-author"></span></p>
+                  <p id="reply-preview" class="mt-0.5 line-clamp-2 break-words text-sm text-muted-foreground"></p>
+                </div>
                 <button
                   type="button"
-                  id="btn-record-cancel"
-                  class="inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-sm ring-1 ring-red-800"
+                  id="btn-reply-cancel"
+                  class="inline-flex h-11 min-h-11 shrink-0 items-center rounded-xl px-3 text-sm ring-1 ring-border"
                 >
                   Abbrechen
                 </button>
-                <button
-                  type="button"
-                  id="btn-record-send"
-                  class="inline-flex h-11 min-h-11 items-center rounded-xl bg-amber-500 px-3 text-sm font-semibold text-zinc-950"
-                >
-                  Senden
+              </div>
+
+              <div id="ai-suggestions" class="mb-2 hidden flex-wrap gap-2" hidden></div>
+
+              <div
+                id="record-bar"
+                class="mb-2 hidden items-center justify-between gap-3 rounded-xl bg-red-950/50 px-3 py-2 ring-1 ring-red-900"
+                role="status"
+              >
+                <p class="flex items-center gap-2 text-sm text-red-100">
+                  <span class="rec-dot inline-block h-2.5 w-2.5 rounded-full bg-red-400" aria-hidden="true"></span>
+                  Aufnahme
+                  <span id="record-timer">0:00</span>
+                </p>
+                <div class="flex gap-2">
+                  <button
+                    type="button"
+                    id="btn-record-cancel"
+                    class="inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-sm ring-1 ring-red-800"
+                  >
+                    Abbrechen
+                  </button>
+                  <button
+                    type="button"
+                    id="btn-record-send"
+                    class="inline-flex h-11 min-h-11 items-center rounded-xl bg-primary px-3 text-sm font-semibold text-primary-foreground"
+                  >
+                    Senden
+                  </button>
+                </div>
+              </div>
+
+              <div
+                id="attach-tray"
+                class="mb-3 hidden grid grid-cols-4 gap-2"
+                hidden
+                role="menu"
+                aria-label="Anhang"
+              >
+                <button type="button" id="btn-attach-image" role="menuitem" class="flex h-auto min-h-0 flex-col items-center gap-1 rounded-2xl px-1 py-2 text-foreground hover:bg-muted">
+                  <span class="inline-flex h-11 min-h-11 w-11 items-center justify-center rounded-full bg-muted text-amber-400" aria-hidden="true">
+                    <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <rect x="3" y="5" width="18" height="14" rx="2" />
+                      <circle cx="8.5" cy="10" r="1.5" />
+                      <path d="m21 15-5-5L5 19" />
+                    </svg>
+                  </span>
+                  <span class="text-xs font-medium leading-snug">Bild</span>
+                </button>
+                <button type="button" id="btn-attach-location" role="menuitem" class="flex h-auto min-h-0 flex-col items-center gap-1 rounded-2xl px-1 py-2 text-foreground hover:bg-muted">
+                  <span class="inline-flex h-11 min-h-11 w-11 items-center justify-center rounded-full bg-muted text-amber-400" aria-hidden="true">
+                    <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11Z" />
+                      <circle cx="12" cy="10" r="2.5" />
+                    </svg>
+                  </span>
+                  <span class="text-xs font-medium leading-snug">Standort</span>
+                </button>
+                <button type="button" id="btn-attach-voice" role="menuitem" class="flex h-auto min-h-0 flex-col items-center gap-1 rounded-2xl px-1 py-2 text-foreground hover:bg-muted">
+                  <span class="inline-flex h-11 min-h-11 w-11 items-center justify-center rounded-full bg-muted text-amber-400" aria-hidden="true">
+                    <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <rect x="9" y="3" width="6" height="11" rx="3" />
+                      <path d="M5 11a7 7 0 0 0 14 0" />
+                      <path d="M12 18v3" />
+                    </svg>
+                  </span>
+                  <span class="text-xs font-medium leading-snug">Sprache</span>
+                </button>
+                <button type="button" id="btn-attach-file" role="menuitem" class="flex h-auto min-h-0 flex-col items-center gap-1 rounded-2xl px-1 py-2 text-foreground hover:bg-muted">
+                  <span class="inline-flex h-11 min-h-11 w-11 items-center justify-center rounded-full bg-muted text-amber-400" aria-hidden="true">
+                    <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M14.5 2H8a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7.5L14.5 2Z" />
+                      <path d="M14 2v6h6" />
+                    </svg>
+                  </span>
+                  <span class="text-xs font-medium leading-snug">Datei</span>
                 </button>
               </div>
-            </div>
 
-            <div
-              id="attach-tray"
-              class="mb-3 hidden grid grid-cols-4 gap-2"
-              hidden
-              role="menu"
-              aria-label="Anhang"
-            >
-              <button
-                type="button"
-                id="btn-attach-image"
-                role="menuitem"
-                class="flex h-auto min-h-0 flex-col items-center gap-1 rounded-2xl px-1 py-2 text-foreground hover:bg-muted"
-              >
-                <span
-                  class="inline-flex h-11 min-h-11 w-11 items-center justify-center rounded-full bg-muted text-amber-400"
-                  aria-hidden="true"
+              <div class="flex items-end gap-2">
+                <button
+                  type="button"
+                  id="btn-attach"
+                  class="inline-flex h-12 w-12 min-h-11 shrink-0 items-center justify-center rounded-full bg-muted text-foreground hover:bg-zinc-800"
+                  aria-expanded="false"
+                  aria-controls="attach-tray"
+                  aria-label="Anhang hinzufügen"
                 >
-                  <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <rect x="3" y="5" width="18" height="14" rx="2" />
-                    <circle cx="8.5" cy="10" r="1.5" />
-                    <path d="m21 15-5-5L5 19" />
+                  <svg class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M12 5v14" />
+                    <path d="M5 12h14" />
                   </svg>
-                </span>
-                <span class="text-xs font-medium leading-snug">Bild</span>
-              </button>
-              <button
-                type="button"
-                id="btn-attach-location"
-                role="menuitem"
-                class="flex h-auto min-h-0 flex-col items-center gap-1 rounded-2xl px-1 py-2 text-foreground hover:bg-muted"
-              >
-                <span
-                  class="inline-flex h-11 min-h-11 w-11 items-center justify-center rounded-full bg-muted text-amber-400"
-                  aria-hidden="true"
+                </button>
+                <label for="message-input" class="sr-only">Nachricht</label>
+                <input
+                  id="message-input"
+                  name="message"
+                  type="text"
+                  maxlength="1000"
+                  autocomplete="off"
+                  enterkeyhint="send"
+                  placeholder="Nachricht"
+                  class="h-12 min-h-11 flex-1 rounded-full bg-zinc-900 px-4 text-base text-foreground ring-1 ring-border placeholder:text-zinc-500"
+                />
+                <button
+                  type="submit"
+                  id="btn-send"
+                  class="inline-flex h-12 w-12 min-h-11 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
+                  aria-label="Senden"
                 >
-                  <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11Z" />
-                    <circle cx="12" cy="10" r="2.5" />
+                  <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="m5 12 14-7-4 14-3-5-7-2Z" />
                   </svg>
-                </span>
-                <span class="text-xs font-medium leading-snug">Standort</span>
-              </button>
-              <button
-                type="button"
-                id="btn-attach-voice"
-                role="menuitem"
-                class="flex h-auto min-h-0 flex-col items-center gap-1 rounded-2xl px-1 py-2 text-foreground hover:bg-muted"
-              >
-                <span
-                  class="inline-flex h-11 min-h-11 w-11 items-center justify-center rounded-full bg-muted text-amber-400"
-                  aria-hidden="true"
-                >
-                  <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <rect x="9" y="3" width="6" height="11" rx="3" />
-                    <path d="M5 11a7 7 0 0 0 14 0" />
-                    <path d="M12 18v3" />
-                  </svg>
-                </span>
-                <span class="text-xs font-medium leading-snug">Sprache</span>
-              </button>
-              <button
-                type="button"
-                id="btn-attach-file"
-                role="menuitem"
-                class="flex h-auto min-h-0 flex-col items-center gap-1 rounded-2xl px-1 py-2 text-foreground hover:bg-muted"
-              >
-                <span
-                  class="inline-flex h-11 min-h-11 w-11 items-center justify-center rounded-full bg-muted text-amber-400"
-                  aria-hidden="true"
-                >
-                  <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M14.5 2H8a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7.5L14.5 2Z" />
-                    <path d="M14 2v6h6" />
-                  </svg>
-                </span>
-                <span class="text-xs font-medium leading-snug">Datei</span>
-              </button>
-            </div>
-
-            <div class="flex items-end gap-2">
-              <button
-                type="button"
-                id="btn-attach"
-                class="inline-flex h-12 min-h-11 w-12 shrink-0 items-center justify-center rounded-xl bg-muted text-2xl font-medium leading-none text-foreground hover:bg-zinc-800"
-                aria-expanded="false"
-                aria-controls="attach-tray"
-                aria-label="Anhang hinzufügen"
-              >
-                +
-              </button>
-              <label for="message-input" class="sr-only">Nachricht</label>
-              <input
-                id="message-input"
-                name="message"
-                type="text"
-                maxlength="1000"
-                autocomplete="off"
-                placeholder="Nachricht schreiben…"
-                class="h-12 min-h-11 flex-1 rounded-xl bg-zinc-900 px-4 text-base text-foreground ring-1 ring-border placeholder:text-zinc-500"
-              />
-              <button
-                type="submit"
-                id="btn-send"
-                class="inline-flex h-12 min-h-11 shrink-0 items-center justify-center rounded-xl bg-amber-500 px-5 text-sm font-semibold text-zinc-950 hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                Senden
-              </button>
-            </div>
-            <input
-              id="input-image"
-              type="file"
-              accept="image/jpeg,image/png,image/webp,image/gif"
-              class="sr-only"
-            />
-            <input
-              id="input-file"
-              type="file"
-              accept="application/pdf,application/zip,.pdf,.zip"
-              class="sr-only"
-            />
-          </form>
+                </button>
+              </div>
+              <input id="input-image" type="file" accept="image/jpeg,image/png,image/webp,image/gif" class="sr-only" />
+              <input id="input-file" type="file" accept="application/pdf,application/zip,.pdf,.zip" class="sr-only" />
+            </form>
+          </div>
         </section>
-
-        <aside
-          class="user-list hidden w-64 shrink-0 overflow-y-auto border-l border-border bg-zinc-950/60 p-4 lg:block"
-          aria-label="Online-Nutzer"
-        >
-          <h2 class="mb-3 text-sm font-semibold text-foreground">
-            Online
-            <span id="online-count-desktop" class="font-normal text-muted-foreground">(0)</span>
-          </h2>
-          <p class="mb-3 text-xs leading-snug text-muted-foreground">
-            Tippe auf eine Person, um privat zu schreiben.
-          </p>
-          <ul id="user-list-desktop" class="flex flex-col gap-1"></ul>
-        </aside>
       </div>
     </div>
 
     <!-- ===================================================================
          Ansicht: Admin-Benutzerverwaltung
          =================================================================== -->
-    <div id="view-admin" class="hidden h-dvh flex-col">
-      <header
-        class="flex min-h-14 shrink-0 flex-wrap items-center gap-2 border-b border-border bg-zinc-950/80 px-3 py-2 backdrop-blur-md sm:px-4"
-      >
+    <div id="view-admin" class="hidden h-full flex-col overflow-hidden">
+      <header class="safe-t safe-x flex min-h-14 shrink-0 items-center gap-2 border-b border-border bg-card px-2 py-1.5 sm:px-4">
+        <button
+          type="button"
+          id="btn-admin-chat"
+          class="inline-flex h-11 w-11 min-h-11 items-center justify-center rounded-full text-foreground hover:bg-muted"
+          aria-label="Zurück zum Chat"
+        >
+          <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="m15 18-6-6 6-6" />
+          </svg>
+        </button>
         <div class="min-w-0 flex-1">
-          <p class="text-xs font-medium uppercase tracking-[0.18em] text-amber-500">Admin</p>
           <h1 class="break-words text-lg font-semibold leading-snug text-foreground">Benutzerverwaltung</h1>
         </div>
         <button
           type="button"
-          id="btn-admin-chat"
-          class="inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-sm font-medium text-foreground ring-1 ring-border hover:bg-muted"
-        >
-          Zum Chat
-        </button>
-        <button
-          type="button"
           id="btn-admin-logout"
-          class="inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-sm font-medium text-muted-foreground ring-1 ring-border hover:bg-muted hover:text-foreground"
+          class="inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
         >
           Abmelden
         </button>
@@ -717,11 +717,7 @@
             role="alert"
           ></p>
 
-          <div
-            class="flex h-14 min-h-14 rounded-full bg-muted p-1.5"
-            role="tablist"
-            aria-label="Benutzerfilter"
-          >
+          <div class="flex h-14 min-h-14 rounded-full bg-muted p-1.5" role="tablist" aria-label="Benutzerfilter">
             <button
               type="button"
               id="tab-admin-pending"
@@ -747,131 +743,113 @@
       </main>
     </div>
 
-    <!-- Mobile: Unterhaltungen von links -->
-    <div id="nav-overlay" class="fixed inset-0 z-40 hidden lg:hidden" hidden>
-      <button
-        type="button"
-        id="nav-backdrop"
-        class="absolute inset-0 bg-black/60"
-        aria-label="Unterhaltungen schließen"
-      ></button>
-      <aside
-        id="nav-panel"
-        class="user-list absolute inset-y-0 left-0 flex w-[min(20rem,90vw)] flex-col bg-zinc-950 shadow-2xl ring-1 ring-border"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="nav-panel-title"
-      >
-        <div class="flex items-center justify-between gap-3 border-b border-border p-4">
-          <h2 id="nav-panel-title" class="text-base font-semibold">Unterhaltungen</h2>
-          <button
-            type="button"
-            id="btn-nav-close"
-            class="inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-sm font-medium ring-1 ring-border"
-          >
-            Schließen
-          </button>
-        </div>
-        <div class="flex min-h-0 flex-1 flex-col overflow-y-auto p-3">
-          <button
-            type="button"
-            id="btn-global-mobile"
-            class="mb-3 flex min-h-11 w-full items-center gap-3 rounded-xl bg-amber-500/15 px-3 py-2 text-left ring-1 ring-amber-500/30"
-          >
-            <span
-              class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-500/20 text-xs font-semibold text-amber-400"
-              aria-hidden="true"
-              >G</span
+    <!-- Mehr / Profil-Schnellzugriff -->
+    <div id="more-overlay" class="fixed inset-0 z-50 hidden" hidden>
+      <button type="button" id="more-backdrop" class="absolute inset-0 bg-black/60" aria-label="Menü schließen"></button>
+      <div class="flex min-h-full items-end justify-center p-4 sm:items-center">
+        <section
+          class="relative w-full max-w-sm rounded-2xl bg-card p-4 shadow-2xl ring-1 ring-border safe-b"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="more-title"
+        >
+          <div class="mb-3 flex items-center justify-between gap-3">
+            <h2 id="more-title" class="text-base font-semibold">Mehr</h2>
+            <button
+              type="button"
+              id="btn-more-close"
+              class="inline-flex h-11 w-11 min-h-11 items-center justify-center rounded-full hover:bg-muted"
+              aria-label="Schließen"
             >
-            <span class="min-w-0">
-              <span class="block text-sm font-medium text-foreground">Globaler Chat</span>
-              <span class="block text-xs text-muted-foreground">Für alle</span>
-            </span>
+              <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+                <path d="M18 6 6 18" />
+                <path d="m6 6 12 12" />
+              </svg>
+            </button>
+          </div>
+          <p id="label-username" class="mb-3 break-words px-3 text-sm text-muted-foreground"></p>
+          <button
+            type="button"
+            id="btn-profile"
+            class="flex min-h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-sm font-medium hover:bg-muted"
+          >
+            Profil
+          </button>
+          <button
+            type="button"
+            id="btn-admin"
+            class="hidden min-h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-sm font-medium hover:bg-muted"
+          >
+            Verwaltung
             <span
-              id="global-unread-mobile"
-              class="ml-auto hidden min-w-6 rounded-full bg-amber-500 px-2 py-0.5 text-center text-xs font-semibold text-zinc-950"
+              id="admin-pending-badge"
+              class="ml-auto hidden min-w-6 rounded-full bg-primary px-2 py-0.5 text-center text-xs font-semibold text-primary-foreground"
             ></span>
           </button>
           <button
             type="button"
-            id="btn-assistant-mobile"
-            class="mb-3 flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-2 text-left ring-1 ring-border hover:bg-muted"
+            id="btn-logout"
+            class="flex min-h-11 w-full items-center rounded-xl px-3 text-left text-sm font-medium text-red-200 hover:bg-red-950/50"
           >
-            <span
-              class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-500/20 text-xs font-semibold text-amber-400"
-              aria-hidden="true"
-              >AI</span
-            >
-            <span class="min-w-0">
-              <span class="block text-sm font-medium text-foreground">Assistent raum</span>
-              <span class="block text-xs text-muted-foreground">Hilfe und Kurzfassung</span>
-            </span>
+            Abmelden
           </button>
-          <ul id="conv-list-mobile" class="flex flex-col gap-1"></ul>
-        </div>
-        <form id="form-user-search-mobile" class="shrink-0 border-t border-border p-3">
-          <label for="user-search-mobile" class="text-xs font-medium text-muted-foreground">
-            Neue Unterhaltung
-          </label>
-          <input
-            id="user-search-mobile"
-            type="search"
-            autocomplete="off"
-            maxlength="64"
-            placeholder="Namen suchen…"
-            class="mt-2 h-11 w-full rounded-xl bg-zinc-900 px-3 text-sm text-foreground ring-1 ring-border placeholder:text-zinc-500"
-          />
-          <ul id="search-picked-mobile" class="mt-2 flex flex-wrap gap-1"></ul>
-          <ul id="user-search-results-mobile" class="mt-2 flex flex-col gap-1"></ul>
-          <button
-            type="submit"
-            id="btn-start-chat-mobile"
-            class="mt-2 hidden h-11 min-h-11 w-full items-center justify-center rounded-xl bg-amber-500 text-sm font-semibold text-zinc-950 hover:bg-amber-400"
-          >
-            Chat starten
-          </button>
-        </form>
-      </aside>
+        </section>
+      </div>
     </div>
 
-    <!-- Mobile: Online-Panel als Overlay -->
-    <div id="online-overlay" class="fixed inset-0 z-40 hidden lg:hidden" hidden>
-      <button
-        type="button"
-        id="online-backdrop"
-        class="absolute inset-0 bg-black/60"
-        aria-label="Online-Liste schließen"
-      ></button>
-      <aside
-        id="online-panel"
-        class="user-list absolute inset-y-0 right-0 flex w-[min(20rem,90vw)] flex-col bg-zinc-950 p-4 shadow-2xl ring-1 ring-border"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="online-panel-title"
-      >
-        <div class="mb-4 flex items-center justify-between gap-3">
-          <h2 id="online-panel-title" class="text-base font-semibold">Wer ist online</h2>
-          <button
-            type="button"
-            id="btn-online-close"
-            class="inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-sm font-medium ring-1 ring-border"
-          >
-            Schließen
-          </button>
-        </div>
-        <ul id="user-list-mobile" class="flex flex-1 flex-col gap-1 overflow-y-auto"></ul>
-      </aside>
+    <!-- Neuer Chat -->
+    <div id="new-chat-overlay" class="fixed inset-0 z-50 hidden" hidden>
+      <button type="button" id="new-chat-backdrop" class="absolute inset-0 bg-black/60" aria-label="Neuen Chat schließen"></button>
+      <div class="flex min-h-full items-end justify-center p-4 sm:items-center">
+        <section
+          class="relative flex max-h-[min(36rem,90dvh)] w-full max-w-lg flex-col rounded-2xl bg-card p-5 shadow-2xl ring-1 ring-border sm:p-6"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="new-chat-title"
+        >
+          <div class="mb-4 flex items-start justify-between gap-3">
+            <div>
+              <h2 id="new-chat-title" class="text-lg font-semibold">Neuer Chat</h2>
+              <p class="mt-1 text-sm leading-relaxed text-muted-foreground">
+                Namen suchen und eine Unterhaltung starten.
+              </p>
+            </div>
+            <button
+              type="button"
+              id="btn-new-chat-close"
+              class="inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-sm font-medium ring-1 ring-border"
+            >
+              Schließen
+            </button>
+          </div>
+          <form id="form-user-search" class="flex min-h-0 flex-1 flex-col">
+            <label for="user-search" class="sr-only">Person suchen</label>
+            <input
+              id="user-search"
+              type="search"
+              autocomplete="off"
+              maxlength="64"
+              placeholder="Namen suchen…"
+              class="h-12 w-full rounded-xl bg-zinc-900 px-4 text-base text-foreground ring-1 ring-border placeholder:text-zinc-500"
+            />
+            <ul id="search-picked" class="mt-2 flex flex-wrap gap-1"></ul>
+            <ul id="user-search-results" class="mt-2 flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto"></ul>
+            <button
+              type="submit"
+              id="btn-start-chat"
+              class="mt-3 hidden h-12 min-h-11 w-full items-center justify-center rounded-xl bg-primary text-sm font-semibold text-primary-foreground hover:bg-amber-400"
+            >
+              Chat starten
+            </button>
+          </form>
+        </section>
+      </div>
     </div>
 
     <!-- Profil / Einstellungen -->
     <div id="profile-overlay" class="fixed inset-0 z-50 hidden" hidden>
-      <button
-        type="button"
-        id="profile-backdrop"
-        class="absolute inset-0 bg-black/60"
-        aria-label="Profil schließen"
-      ></button>
-      <div class="flex min-h-dvh items-end justify-center p-4 sm:items-center">
+      <button type="button" id="profile-backdrop" class="absolute inset-0 bg-black/60" aria-label="Profil schließen"></button>
+      <div class="flex min-h-full items-end justify-center p-4 sm:items-center">
         <section
           id="profile-panel"
           class="relative w-full max-w-md rounded-2xl bg-card p-5 shadow-2xl ring-1 ring-border sm:p-6"
@@ -883,7 +861,7 @@
             <div>
               <h2 id="profile-title" class="text-lg font-semibold">Profil</h2>
               <p class="mt-1 text-sm leading-relaxed text-muted-foreground">
-                Echter Name und Avatar erscheinen im Chat und in der Online-Liste.
+                Echter Name und Avatar erscheinen im Chat und in der Kontaktliste.
               </p>
             </div>
             <button
@@ -898,9 +876,7 @@
           <form id="form-profile" class="flex flex-col gap-4">
             <div class="flex items-center gap-3">
               <div id="profile-avatar-preview" class="h-16 w-16 overflow-hidden rounded-full bg-muted"></div>
-              <p class="text-sm leading-snug text-muted-foreground">
-                Ohne Bild werden Initialen angezeigt.
-              </p>
+              <p class="text-sm leading-snug text-muted-foreground">Ohne Bild werden Initialen angezeigt.</p>
             </div>
 
             <div class="flex flex-col gap-2">
@@ -938,21 +914,13 @@
               />
             </div>
 
-            <p
-              id="profile-error"
-              class="hidden rounded-lg bg-red-950/80 px-3 py-2 text-sm text-red-200"
-              role="alert"
-            ></p>
-            <p
-              id="profile-ok"
-              class="hidden rounded-lg bg-emerald-950/70 px-3 py-2 text-sm text-emerald-200"
-              role="status"
-            ></p>
+            <p id="profile-error" class="hidden rounded-lg bg-red-950/80 px-3 py-2 text-sm text-red-200" role="alert"></p>
+            <p id="profile-ok" class="hidden rounded-lg bg-emerald-950/70 px-3 py-2 text-sm text-emerald-200" role="status"></p>
 
             <button
               type="submit"
               id="profile-submit"
-              class="inline-flex h-12 min-h-11 items-center justify-center rounded-xl bg-amber-500 px-4 text-base font-semibold text-zinc-950 hover:bg-amber-400 disabled:opacity-60"
+              class="inline-flex h-12 min-h-11 items-center justify-center rounded-xl bg-primary px-4 text-base font-semibold text-primary-foreground hover:bg-amber-400 disabled:opacity-60"
             >
               Speichern
             </button>
@@ -961,15 +929,10 @@
       </div>
     </div>
 
-    <!-- Chat-Aktionen: ungelesen, KI-Status -->
+    <!-- Chat-Aktionen -->
     <div id="chat-menu-overlay" class="fixed inset-0 z-50 hidden" hidden>
-      <button
-        type="button"
-        id="chat-menu-backdrop"
-        class="absolute inset-0 bg-black/60"
-        aria-label="Menü schließen"
-      ></button>
-      <div class="flex min-h-dvh items-end justify-center p-4 sm:items-center">
+      <button type="button" id="chat-menu-backdrop" class="absolute inset-0 bg-black/60" aria-label="Menü schließen"></button>
+      <div class="flex min-h-full items-end justify-center p-4 sm:items-center">
         <div
           id="chat-menu"
           class="relative w-full max-w-sm rounded-2xl bg-card p-4 shadow-2xl ring-1 ring-border"
@@ -977,83 +940,39 @@
           aria-label="Chat-Aktionen"
         >
           <h2 class="mb-3 text-base font-semibold">Chat</h2>
-          <button
-            type="button"
-            id="btn-mark-unread"
-            class="flex min-h-11 w-full items-center rounded-xl px-3 text-left text-sm font-medium hover:bg-muted"
-            role="menuitem"
-          >
+          <button type="button" id="btn-mark-unread" class="flex min-h-11 w-full items-center rounded-xl px-3 text-left text-sm font-medium hover:bg-muted" role="menuitem">
             Als ungelesen markieren
           </button>
-          <button
-            type="button"
-            id="btn-summarize"
-            class="flex min-h-11 w-full items-center rounded-xl px-3 text-left text-sm font-medium hover:bg-muted"
-            role="menuitem"
-          >
+          <button type="button" id="btn-summarize" class="flex min-h-11 w-full items-center rounded-xl px-3 text-left text-sm font-medium hover:bg-muted" role="menuitem">
             Zusammenfassen
           </button>
-          <button
-            type="button"
-            id="btn-notify"
-            class="flex min-h-11 w-full items-center rounded-xl px-3 text-left text-sm font-medium hover:bg-muted"
-            role="menuitem"
-          >
+          <button type="button" id="btn-notify" class="flex min-h-11 w-full items-center rounded-xl px-3 text-left text-sm font-medium hover:bg-muted" role="menuitem">
             Benachrichtigungen erlauben
           </button>
           <div id="group-tools" class="mt-3 hidden flex-col gap-2 border-t border-border pt-3">
             <label for="group-title" class="text-xs font-medium text-muted-foreground">Gruppenname</label>
             <div class="flex gap-2">
-              <input
-                id="group-title"
-                type="text"
-                maxlength="80"
-                class="h-11 min-h-11 flex-1 rounded-xl bg-zinc-900 px-3 text-sm text-foreground ring-1 ring-border"
-                placeholder="Name der Gruppe"
-              />
-              <button
-                type="button"
-                id="btn-group-title"
-                class="inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-sm font-medium ring-1 ring-border"
-              >
+              <input id="group-title" type="text" maxlength="80" class="h-11 min-h-11 flex-1 rounded-xl bg-zinc-900 px-3 text-sm text-foreground ring-1 ring-border" placeholder="Name der Gruppe" />
+              <button type="button" id="btn-group-title" class="inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-sm font-medium ring-1 ring-border">
                 Speichern
               </button>
             </div>
             <label for="group-add-user" class="text-xs font-medium text-muted-foreground">Person einladen</label>
             <div class="flex gap-2">
-              <input
-                id="group-add-user"
-                type="text"
-                maxlength="32"
-                class="h-11 min-h-11 flex-1 rounded-xl bg-zinc-900 px-3 text-sm text-foreground ring-1 ring-border"
-                placeholder="Benutzername"
-              />
-              <button
-                type="button"
-                id="btn-group-add"
-                class="inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-sm font-medium ring-1 ring-border"
-              >
+              <input id="group-add-user" type="text" maxlength="32" class="h-11 min-h-11 flex-1 rounded-xl bg-zinc-900 px-3 text-sm text-foreground ring-1 ring-border" placeholder="Benutzername" />
+              <button type="button" id="btn-group-add" class="inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-sm font-medium ring-1 ring-border">
                 Einladen
               </button>
             </div>
-            <button
-              type="button"
-              id="btn-group-leave"
-              class="flex min-h-11 w-full items-center rounded-xl px-3 text-left text-sm font-medium text-red-200 hover:bg-red-950/50"
-            >
+            <button type="button" id="btn-group-leave" class="flex min-h-11 w-full items-center rounded-xl px-3 text-left text-sm font-medium text-red-200 hover:bg-red-950/50">
               Gruppe verlassen
             </button>
           </div>
           <p id="summary-box" class="mt-3 hidden whitespace-pre-wrap break-words rounded-xl bg-zinc-900 p-3 text-sm leading-relaxed text-foreground ring-1 ring-border"></p>
           <p id="ai-hint" class="mt-3 text-xs leading-relaxed text-muted-foreground">
-            Antwortvorschläge und Kurzfassung laufen lokal. Mit AI_ENABLED und AI_API_KEY in der .env
-            übernimmt ein Sprachmodell.
+            Antwortvorschläge und Kurzfassung laufen lokal. Mit AI_ENABLED und AI_API_KEY in der .env übernimmt ein Sprachmodell.
           </p>
-          <button
-            type="button"
-            id="btn-chat-menu-close"
-            class="mt-3 inline-flex h-11 min-h-11 w-full items-center justify-center rounded-xl px-3 text-sm font-medium ring-1 ring-border"
-          >
+          <button type="button" id="btn-chat-menu-close" class="mt-3 inline-flex h-11 min-h-11 w-full items-center justify-center rounded-xl px-3 text-sm font-medium ring-1 ring-border">
             Schließen
           </button>
         </div>
@@ -1062,13 +981,8 @@
 
     <!-- Nachrichtensuche -->
     <div id="search-overlay" class="fixed inset-0 z-50 hidden" hidden>
-      <button
-        type="button"
-        id="search-backdrop"
-        class="absolute inset-0 bg-black/60"
-        aria-label="Suche schließen"
-      ></button>
-      <div class="flex min-h-dvh items-end justify-center p-4 sm:items-center">
+      <button type="button" id="search-backdrop" class="absolute inset-0 bg-black/60" aria-label="Suche schließen"></button>
+      <div class="flex min-h-full items-end justify-center p-4 sm:items-center">
         <section
           id="search-panel"
           class="relative flex max-h-[min(36rem,90dvh)] w-full max-w-lg flex-col rounded-2xl bg-card p-5 shadow-2xl ring-1 ring-border sm:p-6"
@@ -1079,15 +993,9 @@
           <div class="mb-4 flex items-start justify-between gap-3">
             <div>
               <h2 id="search-title" class="text-lg font-semibold">Nachrichten suchen</h2>
-              <p class="mt-1 text-sm leading-relaxed text-muted-foreground">
-                Durchsucht den globalen Raum und deine privaten Chats.
-              </p>
+              <p class="mt-1 text-sm leading-relaxed text-muted-foreground">Durchsucht den globalen Raum und deine privaten Chats.</p>
             </div>
-            <button
-              type="button"
-              id="btn-search-close"
-              class="inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-sm font-medium ring-1 ring-border"
-            >
+            <button type="button" id="btn-search-close" class="inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-sm font-medium ring-1 ring-border">
               Schließen
             </button>
           </div>
@@ -1113,48 +1021,21 @@
     </div>
 
     <div id="message-menu-overlay" class="fixed inset-0 z-50 hidden" hidden>
-      <button
-        type="button"
-        id="message-menu-backdrop"
-        class="absolute inset-0 bg-black/60"
-        aria-label="Nachrichtenmenü schließen"
-      ></button>
-      <section
-        id="message-menu"
-        class="absolute z-10 bg-card shadow-2xl ring-1 ring-border/80"
-        role="menu"
-        aria-label="Nachrichtenaktionen"
-      >
+      <button type="button" id="message-menu-backdrop" class="absolute inset-0 bg-black/60" aria-label="Nachrichtenmenü schließen"></button>
+      <section id="message-menu" class="absolute z-10 bg-card shadow-2xl ring-1 ring-border/80" role="menu" aria-label="Nachrichtenaktionen">
         <p id="message-menu-handle" class="mx-auto mb-3 hidden h-1 w-10 rounded-full bg-muted" aria-hidden="true"></p>
-        <div
-          id="message-menu-reactions"
-          class="flex h-14 min-h-14 items-center justify-around rounded-full bg-muted p-1.5"
-        ></div>
+        <div id="message-menu-reactions" class="flex h-14 min-h-14 items-center justify-around rounded-full bg-muted p-1.5"></div>
         <ul id="message-menu-actions" class="mt-3 flex flex-col gap-1"></ul>
       </section>
     </div>
 
     <div id="forward-overlay" class="fixed inset-0 z-50 hidden" hidden>
-      <button
-        type="button"
-        id="forward-backdrop"
-        class="absolute inset-0 bg-black/60"
-        aria-label="Weiterleiten schließen"
-      ></button>
-      <div class="flex min-h-dvh items-end justify-center p-4 sm:items-center">
-        <section
-          class="relative w-full max-w-sm rounded-2xl bg-card p-4 shadow-2xl ring-1 ring-border"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="forward-title"
-        >
+      <button type="button" id="forward-backdrop" class="absolute inset-0 bg-black/60" aria-label="Weiterleiten schließen"></button>
+      <div class="flex min-h-full items-end justify-center p-4 sm:items-center">
+        <section class="relative w-full max-w-sm rounded-2xl bg-card p-4 shadow-2xl ring-1 ring-border" role="dialog" aria-modal="true" aria-labelledby="forward-title">
           <div class="mb-3 flex items-center justify-between gap-3">
             <h2 id="forward-title" class="text-base font-semibold">Weiterleiten an</h2>
-            <button
-              type="button"
-              id="btn-forward-close"
-              class="inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-sm ring-1 ring-border"
-            >
+            <button type="button" id="btn-forward-close" class="inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-sm ring-1 ring-border">
               Schließen
             </button>
           </div>

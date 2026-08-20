@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none" aria-hidden="true">
+  <path
+    fill="#FBBF24"
+    d="M118 148c0-48.6 39.4-88 88-88h86c48.6 0 88 39.4 88 88v46c0 48.6-39.4 88-88 88h-18l-54 46 12-46h-26c-48.6 0-88-39.4-88-88v-46Z"
+  />
+  <path
+    fill="#D97706"
+    d="M168 214c0-52.9 42.9-96 96-96h92c52.9 0 96 43.1 96 96v58c0 52.9-43.1 96-96 96h-22l-62 52 14-52h-22c-53.1 0-96-43.1-96-96v-58Z"
+  />
+  <path
+    d="M236 198c18-22 52-30 86-22"
+    stroke="#fff"
+    stroke-width="10"
+    stroke-linecap="round"
+    opacity="0.85"
+  />
+  <circle cx="300" cy="268" r="16" fill="#fff" />
+  <circle cx="348" cy="268" r="16" fill="#fff" />
+  <circle cx="396" cy="268" r="16" fill="#fff" />
+</svg>

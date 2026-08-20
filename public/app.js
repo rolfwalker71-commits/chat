@@ -37,7 +37,6 @@
   const authSubmit = document.getElementById("auth-submit");
   const labelUsername = document.getElementById("label-username");
   const headerAvatar = document.getElementById("header-avatar");
-  const roomKicker = document.getElementById("room-kicker");
   const roomTitle = document.getElementById("room-title");
   const formMessage = document.getElementById("form-message");
   const messageInput = document.getElementById("message-input");
@@ -55,32 +54,35 @@
   const tabAdminAll = document.getElementById("tab-admin-all");
   const adminUserList = document.getElementById("admin-user-list");
   const pendingBanner = document.getElementById("pending-banner");
-  const btnOnline = document.getElementById("btn-online");
-  const btnOnlineClose = document.getElementById("btn-online-close");
-  const onlineOverlay = document.getElementById("online-overlay");
-  const onlineBackdrop = document.getElementById("online-backdrop");
-  const userListDesktop = document.getElementById("user-list-desktop");
-  const userListMobile = document.getElementById("user-list-mobile");
-  const onlineCountDesktop = document.getElementById("online-count-desktop");
-  const onlineCountMobile = document.getElementById("online-count-mobile");
-  const btnNav = document.getElementById("btn-nav");
-  const btnNavClose = document.getElementById("btn-nav-close");
-  const navOverlay = document.getElementById("nav-overlay");
-  const navBackdrop = document.getElementById("nav-backdrop");
-  const btnGlobalDesktop = document.getElementById("btn-global-desktop");
-  const btnGlobalMobile = document.getElementById("btn-global-mobile");
-  const convListDesktop = document.getElementById("conv-list-desktop");
-  const convListMobile = document.getElementById("conv-list-mobile");
-  const userSearchDesktop = document.getElementById("user-search-desktop");
-  const userSearchMobile = document.getElementById("user-search-mobile");
-  const searchResultsDesktop = document.getElementById("user-search-results-desktop");
-  const searchResultsMobile = document.getElementById("user-search-results-mobile");
-  const searchPickedDesktop = document.getElementById("search-picked-desktop");
-  const searchPickedMobile = document.getElementById("search-picked-mobile");
-  const formSearchDesktop = document.getElementById("form-user-search-desktop");
-  const formSearchMobile = document.getElementById("form-user-search-mobile");
-  const btnStartChatDesktop = document.getElementById("btn-start-chat-desktop");
-  const btnStartChatMobile = document.getElementById("btn-start-chat-mobile");
+  const paneList = document.getElementById("pane-list");
+  const paneThread = document.getElementById("pane-thread");
+  const threadEmpty = document.getElementById("thread-empty");
+  const threadActive = document.getElementById("thread-active");
+  const threadAvatar = document.getElementById("thread-avatar");
+  const btnBack = document.getElementById("btn-back");
+  const convList = document.getElementById("conv-list");
+  const userList = document.getElementById("user-list");
+  const onlineCount = document.getElementById("online-count");
+  const userSearch = document.getElementById("user-search");
+  const userSearchResults = document.getElementById("user-search-results");
+  const searchPicked = document.getElementById("search-picked");
+  const formUserSearch = document.getElementById("form-user-search");
+  const btnStartChat = document.getElementById("btn-start-chat");
+  const btnNewChat = document.getElementById("btn-new-chat");
+  const btnNewChatClose = document.getElementById("btn-new-chat-close");
+  const newChatOverlay = document.getElementById("new-chat-overlay");
+  const newChatBackdrop = document.getElementById("new-chat-backdrop");
+  const btnMore = document.getElementById("btn-more");
+  const btnMoreClose = document.getElementById("btn-more-close");
+  const moreOverlay = document.getElementById("more-overlay");
+  const moreBackdrop = document.getElementById("more-backdrop");
+  const navMore = document.getElementById("nav-more");
+  const navChats = document.getElementById("nav-chats");
+  const navContacts = document.getElementById("nav-contacts");
+  const tabListChats = document.getElementById("tab-list-chats");
+  const tabListContacts = document.getElementById("tab-list-contacts");
+  const screenChats = document.getElementById("screen-chats");
+  const screenContacts = document.getElementById("screen-contacts");
   const btnProfile = document.getElementById("btn-profile");
   const btnProfileClose = document.getElementById("btn-profile-close");
   const profileOverlay = document.getElementById("profile-overlay");
@@ -124,8 +126,6 @@
   const chatMenuBackdrop = document.getElementById("chat-menu-backdrop");
   const btnMarkUnread = document.getElementById("btn-mark-unread");
   const aiHint = document.getElementById("ai-hint");
-  const globalUnreadDesktop = document.getElementById("global-unread-desktop");
-  const globalUnreadMobile = document.getElementById("global-unread-mobile");
   const roomStatus = document.getElementById("room-status");
   const btnAttachFile = document.getElementById("btn-attach-file");
   const inputFile = document.getElementById("input-file");
@@ -138,8 +138,6 @@
   const btnGroupAdd = document.getElementById("btn-group-add");
   const btnGroupLeave = document.getElementById("btn-group-leave");
   const summaryBox = document.getElementById("summary-box");
-  const btnAssistantDesktop = document.getElementById("btn-assistant-desktop");
-  const btnAssistantMobile = document.getElementById("btn-assistant-mobile");
   const forwardOverlay = document.getElementById("forward-overlay");
   const messageMenuOverlay = document.getElementById("message-menu-overlay");
   const messageMenuBackdrop = document.getElementById("message-menu-backdrop");
@@ -159,6 +157,9 @@
   let socket = null;
   /** null = globaler Raum */
   let activeConversationId = null;
+  let chatSelected = false;
+  /** @type {"chats" | "contacts"} */
+  let listTab = "chats";
   /** @type {Array} */
   let conversations = [];
   /** @type {Map<string, {id:number, username:string, realName?:string}>} */
@@ -302,10 +303,62 @@
 
   function pillClass(active) {
     const base =
-      "h-full min-h-0 max-h-full flex-1 rounded-full px-2 text-xs font-medium leading-none sm:px-3 sm:text-sm";
+      "inline-flex h-full min-h-0 max-h-full flex-1 items-center justify-center rounded-full px-2 text-xs font-medium leading-none sm:px-3 sm:text-sm";
     return active
       ? `${base} text-foreground shadow-sm shadow-black/40 bg-background`
       : `${base} text-muted-foreground`;
+  }
+
+  function isWideLayout() {
+    return window.matchMedia("(min-width: 1024px)").matches;
+  }
+
+  function setListTab(tab) {
+    listTab = tab === "contacts" ? "contacts" : "chats";
+    const chats = listTab === "chats";
+    screenChats.classList.toggle("hidden", !chats);
+    screenChats.classList.toggle("flex", chats);
+    screenContacts.classList.toggle("hidden", chats);
+    screenContacts.classList.toggle("flex", !chats);
+    tabListChats.setAttribute("aria-selected", String(chats));
+    tabListContacts.setAttribute("aria-selected", String(!chats));
+    tabListChats.className = pillClass(chats);
+    tabListContacts.className = pillClass(!chats);
+    const navOn =
+      "flex h-auto min-h-11 flex-1 flex-col items-center justify-center gap-0.5 py-1 text-foreground";
+    const navOff =
+      "flex h-auto min-h-11 flex-1 flex-col items-center justify-center gap-0.5 py-1 text-muted-foreground";
+    navChats.className = chats ? navOn : navOff;
+    navContacts.className = chats ? navOff : navOn;
+    navChats.setAttribute("aria-current", chats ? "page" : "false");
+    navContacts.setAttribute("aria-current", chats ? "false" : "page");
+  }
+
+  function updatePanes() {
+    const wide = isWideLayout();
+    const open = chatSelected;
+    paneList.classList.toggle("hidden", open && !wide);
+    paneList.classList.toggle("flex", !(open && !wide));
+    paneThread.classList.toggle("hidden", !open && !wide);
+    paneThread.classList.toggle("flex", open || wide);
+    threadEmpty.classList.toggle("hidden", open);
+    threadEmpty.classList.toggle("lg:flex", !open);
+    threadEmpty.classList.toggle("flex", !open && wide);
+    threadActive.classList.toggle("hidden", !open);
+    threadActive.classList.toggle("flex", open);
+  }
+
+  function closeThread(fromPop = false) {
+    emitTyping(false);
+    chatSelected = false;
+    hideReactionPicker();
+    hideMessageMenu();
+    setAttachTray(false);
+    updatePanes();
+    renderConversationLists();
+    if (!fromPop && !isWideLayout() && history.state?.view === "thread") {
+      history.back();
+    }
   }
 
   function showAuth() {
@@ -324,7 +377,8 @@
     viewChat.classList.remove("hidden");
     viewChat.classList.add("flex");
     refreshSelfUi();
-    if (canPost()) messageInput.focus();
+    updatePanes();
+    if (chatSelected && canPost()) messageInput.focus();
   }
 
   function showAdmin() {
@@ -333,6 +387,7 @@
     viewChat.classList.remove("flex");
     viewAdmin.classList.remove("hidden");
     viewAdmin.classList.add("flex");
+    setMorePanel(false);
     showError(adminError, "");
     loadAdminUsers();
   }
@@ -344,12 +399,8 @@
   function setComposerLocked(locked) {
     formMessage.classList.toggle("hidden", locked);
     pendingBanner.classList.toggle("hidden", !locked);
-    formSearchDesktop.classList.toggle("pointer-events-none", locked);
-    formSearchDesktop.classList.toggle("opacity-50", locked);
-    formSearchMobile.classList.toggle("pointer-events-none", locked);
-    formSearchMobile.classList.toggle("opacity-50", locked);
-    btnAssistantDesktop.disabled = locked;
-    btnAssistantMobile.disabled = locked;
+    formUserSearch.classList.toggle("pointer-events-none", locked);
+    formUserSearch.classList.toggle("opacity-50", locked);
     if (locked) setAttachTray(false);
   }
 
@@ -379,12 +430,13 @@
     fillAvatar(profileAvatarPreview, currentUser, "h-16 w-16");
     const isAdmin = Boolean(currentUser.isAdmin);
     btnAdmin.classList.toggle("hidden", !isAdmin);
-    btnAdmin.classList.toggle("inline-flex", isAdmin);
+    btnAdmin.classList.toggle("flex", isAdmin);
     if (isAdmin) setAdminPendingBadge(currentUser.pendingUsers);
     setComposerLocked(!canPost());
   }
 
   function sameRoom(conversationId) {
+    if (!chatSelected) return false;
     if (conversationId == null && activeConversationId == null) return true;
     return Number(conversationId) === Number(activeConversationId);
   }
@@ -495,6 +547,7 @@
     seenMessageIds.clear();
     messagesById.clear();
     activeConversationId = null;
+    chatSelected = false;
     replyTarget = null;
     globalUnread = 0;
     aiStatus = null;
@@ -503,8 +556,8 @@
     setAttachTray(false);
     setReplyTarget(null);
     messageList.replaceChildren();
-    setNavPanel(false);
-    setOnlinePanel(false);
+    setNewChatPanel(false);
+    setMorePanel(false);
     setProfilePanel(false);
     setSearchPanel(false);
     setChatMenu(false);
@@ -516,8 +569,27 @@
   }
 
   function formatTime(iso) {
+    if (!iso) return "";
     try {
       return timeFormatter.format(new Date(iso));
+    } catch {
+      return "";
+    }
+  }
+
+  function formatListTime(iso) {
+    if (!iso) return "";
+    try {
+      const date = new Date(iso);
+      const now = new Date();
+      const sameDay =
+        date.getFullYear() === now.getFullYear() &&
+        date.getMonth() === now.getMonth() &&
+        date.getDate() === now.getDate();
+      if (sameDay) {
+        return new Intl.DateTimeFormat("de-DE", { hour: "2-digit", minute: "2-digit" }).format(date);
+      }
+      return new Intl.DateTimeFormat("de-DE", { day: "2-digit", month: "2-digit" }).format(date);
     } catch {
       return "";
     }
@@ -1126,38 +1198,32 @@
     const row = el("article", `group relative flex gap-2 ${mine ? "justify-end" : "justify-start"}`);
     row.setAttribute("data-message-id", String(message.id ?? ""));
 
+    const showPeerAvatar =
+      !mine && (activeConversationId == null || activeConversation()?.type === "group");
     const avatar = el("div", "");
-    fillAvatar(avatar, message, "h-9 w-9 mt-1");
-    if (mine) avatar.classList.add("order-2");
+    if (showPeerAvatar) fillAvatar(avatar, message, "h-8 w-8 mt-1");
 
-    const col = el("div", `max-w-[min(36rem,85%)] ${mine ? "items-end" : "items-start"} flex flex-col`);
+    const col = el("div", `max-w-[min(36rem,82%)] ${mine ? "items-end" : "items-start"} flex flex-col`);
 
     const bubble = el(
       "div",
-      `w-full rounded-2xl px-4 py-3 leading-snug ${
+      `w-full px-3 py-2 leading-snug ${
         message.deleted
-          ? "bg-zinc-900/70 text-muted-foreground ring-1 ring-border"
+          ? "rounded-2xl bg-zinc-900/70 text-muted-foreground ring-1 ring-border"
           : mine
-            ? "bg-amber-500/15 text-foreground ring-1 ring-amber-500/20"
-            : "bg-zinc-900 text-foreground ring-1 ring-border"
+            ? "rounded-2xl rounded-br-md bg-primary/20 text-foreground"
+            : "rounded-2xl rounded-bl-md bg-card text-foreground ring-1 ring-border/60"
       }`
     );
     bubble.setAttribute("data-bubble", "");
 
-    const meta = el("div", "mb-1 flex flex-wrap items-baseline gap-x-2 gap-y-0.5");
-    const name = displayName(message);
-    meta.append(
-      el(
-        "span",
-        `text-sm font-semibold break-words ${mine ? "text-amber-400" : "text-zinc-200"}`,
-        name
-      )
-    );
-    if (message.realName && message.username) {
-      meta.append(el("span", "text-xs text-muted-foreground", `@${message.username}`));
+    if (!mine) {
+      const meta = el("div", "mb-0.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5");
+      meta.append(
+        el("span", "text-sm font-semibold break-words text-amber-400", displayName(message))
+      );
+      bubble.append(meta);
     }
-    meta.append(el("time", "text-xs text-muted-foreground", formatTime(message.createdAt)));
-    bubble.append(meta);
 
     if (message.replyTo) {
       const quote = el(
@@ -1269,6 +1335,14 @@
       }
     }
 
+    bubble.append(
+      el(
+        "time",
+        `mt-1 block text-right text-[0.7rem] leading-none ${mine ? "text-amber-200/70" : "text-muted-foreground"}`,
+        formatListTime(message.createdAt)
+      )
+    );
+
     col.append(bubble);
 
     if (!message.deleted) {
@@ -1279,8 +1353,9 @@
       if (receipt.textContent) col.append(receipt);
     }
 
-    if (mine) row.append(col, avatar);
-    else row.append(avatar, col);
+    if (mine) row.append(col);
+    else if (showPeerAvatar) row.append(avatar, col);
+    else row.append(col);
 
     applyReactions(row, message);
     return row;
@@ -1374,17 +1449,7 @@
 
   function setGlobalUnread(count) {
     globalUnread = Number(count) || 0;
-    const label = globalUnread > 99 ? "99+" : String(globalUnread);
-    for (const node of [globalUnreadDesktop, globalUnreadMobile]) {
-      if (!node) continue;
-      if (globalUnread > 0) {
-        node.textContent = label;
-        node.classList.remove("hidden");
-      } else {
-        node.textContent = "";
-        node.classList.add("hidden");
-      }
-    }
+    renderConversationLists();
   }
 
   function applyUnread({ conversationId, unreadCount }) {
@@ -1437,70 +1502,112 @@
     return names.length ? names.join(", ") : "Gruppe";
   }
 
+  function isAssistantConversation(conv) {
+    if (!conv) return false;
+    if (conv.peer?.username === "raum") return true;
+    return (conv.members || []).some((member) => member.username === "raum");
+  }
+
   function updateRoomHeader() {
+    if (!chatSelected) {
+      roomTitle.textContent = "Chat";
+      roomStatus.textContent = "";
+      threadAvatar.replaceChildren();
+      return;
+    }
     if (activeConversationId == null) {
-      roomKicker.textContent = "Raum";
       roomTitle.textContent = "Globaler Chat";
       roomStatus.textContent = "Für alle Angemeldeten";
-      highlightGlobal(true);
+      fillAvatar(threadAvatar, { username: "global", realName: "Globaler Chat" }, "h-10 w-10");
       return;
     }
     const conv = conversations.find((c) => c.id === activeConversationId);
-    roomKicker.textContent = conv?.type === "group" ? "Gruppe" : "Privat";
     roomTitle.textContent = conversationLabel(conv);
     roomStatus.textContent = roomStatusText(conv);
-    highlightGlobal(false);
+    const avatarUser =
+      conv?.type === "dm" && conv.peer
+        ? conv.peer
+        : { username: "Gruppe", realName: conversationLabel(conv), avatarUrl: "" };
+    fillAvatar(threadAvatar, avatarUser, "h-10 w-10");
   }
 
-  function highlightGlobal(active) {
-    const cls = active
-      ? "mb-3 flex min-h-11 w-full items-center gap-3 rounded-xl bg-amber-500/15 px-3 py-2 text-left ring-1 ring-amber-500/30"
-      : "mb-3 flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-2 text-left ring-1 ring-border hover:bg-muted";
-    btnGlobalDesktop.className = cls;
-    btnGlobalMobile.className = cls;
+  function conversationRowClass(active) {
+    return `flex min-h-14 w-full items-center gap-3 px-3 py-2 text-left whitespace-normal ${
+      active ? "bg-muted" : "hover:bg-muted/70"
+    }`;
+  }
+
+  function appendConversationRow({ title, preview, time, unread, avatarUser, active, onClick }) {
+    const item = el("li", "border-b border-border/60");
+    const btn = el("button", conversationRowClass(active));
+    btn.type = "button";
+    const avatarHost = el("div", "");
+    fillAvatar(avatarHost, avatarUser, "h-12 w-12");
+    const body = el("span", "min-w-0 flex-1");
+    const top = el("span", "flex items-start justify-between gap-2");
+    top.append(el("span", "min-w-0 break-words text-sm font-medium leading-snug text-foreground", title));
+    if (time) top.append(el("span", "shrink-0 text-xs text-muted-foreground", time));
+    body.append(top);
+    const bottom = el("span", "mt-0.5 flex items-start justify-between gap-2");
+    bottom.append(
+      el("span", "min-w-0 line-clamp-2 break-words text-sm leading-snug text-muted-foreground", preview)
+    );
+    const badge = unreadBadge(unread);
+    if (badge) {
+      badge.classList.remove("ml-auto");
+      bottom.append(badge);
+    }
+    body.append(bottom);
+    btn.append(avatarHost, body);
+    btn.addEventListener("click", onClick);
+    item.append(btn);
+    convList.append(item);
   }
 
   function renderConversationLists() {
-    function fill(list) {
-      list.replaceChildren();
-      if (!conversations.length) {
-        list.append(
-          el("li", "px-2 py-2 text-xs leading-snug text-muted-foreground", "Noch keine privaten Chats.")
-        );
-        return;
-      }
-      for (const conv of conversations) {
-        const item = el("li", "");
-        const btn = el(
-          "button",
-          `flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-2 text-left whitespace-normal ${
-            conv.id === activeConversationId
-              ? "bg-amber-500/15 ring-1 ring-amber-500/30"
-              : "hover:bg-muted ring-1 ring-transparent"
-          }`
-        );
-        btn.type = "button";
-        const avatarHost = el("div", "");
-        const avatarUser =
-          conv.type === "dm" && conv.peer
-            ? conv.peer
-            : { username: "Gruppe", realName: "Gruppe", avatarUrl: "" };
-        fillAvatar(avatarHost, avatarUser, "h-9 w-9");
-        const text = el("span", "min-w-0 flex-1");
-        text.append(el("span", "block break-words text-sm font-medium leading-snug", conversationLabel(conv)));
-        const preview = previewText(conv.lastMessage) || "Keine Nachrichten";
-        text.append(el("span", "mt-0.5 block break-words text-xs leading-snug text-muted-foreground", preview));
-        btn.append(avatarHost, text);
-        const badge = unreadBadge(conv.unreadCount);
-        if (badge) btn.append(badge);
-        btn.addEventListener("click", () => openConversation(conv.id));
-        item.append(btn);
-        list.append(item);
-      }
+    convList.replaceChildren();
+    appendConversationRow({
+      title: "Globaler Chat",
+      preview: "Für alle Angemeldeten",
+      time: "",
+      unread: globalUnread,
+      avatarUser: { username: "global", realName: "Globaler Chat" },
+      active: chatSelected && activeConversationId == null,
+      onClick: openGlobal,
+    });
+    appendConversationRow({
+      title: "Assistent raum",
+      preview: "Hilfe und Kurzfassung",
+      time: "",
+      unread: 0,
+      avatarUser: { username: "raum", realName: "Assistent" },
+      active: chatSelected && isAssistantConversation(conversations.find((c) => c.id === activeConversationId)),
+      onClick: openAssistant,
+    });
+
+    const privateChats = conversations.filter((conv) => !isAssistantConversation(conv));
+    if (!privateChats.length) {
+      convList.append(
+        el("li", "px-4 py-4 text-sm leading-snug text-muted-foreground", "Noch keine privaten Chats.")
+      );
+      return;
     }
 
-    fill(convListDesktop);
-    fill(convListMobile);
+    for (const conv of privateChats) {
+      const avatarUser =
+        conv.type === "dm" && conv.peer
+          ? conv.peer
+          : { username: "Gruppe", realName: "Gruppe", avatarUrl: "" };
+      appendConversationRow({
+        title: conversationLabel(conv),
+        preview: previewText(conv.lastMessage) || "Keine Nachrichten",
+        time: formatListTime(conv.lastMessage?.createdAt),
+        unread: conv.unreadCount,
+        avatarUser,
+        active: chatSelected && conv.id === activeConversationId,
+        onClick: () => openConversation(conv.id),
+      });
+    }
   }
 
   async function loadConversations() {
@@ -1549,9 +1656,15 @@
     hideReactionPicker();
     hideMessageMenu();
     activeConversationId = conversationId;
+    chatSelected = true;
     updateRoomHeader();
     renderConversationLists();
-    setNavPanel(false);
+    setNewChatPanel(false);
+    setListTab("chats");
+    updatePanes();
+    if (!isWideLayout() && history.state?.view !== "thread") {
+      history.pushState({ view: "thread" }, "");
+    }
     messageList.replaceChildren(
       el("p", "mx-auto mt-12 text-center text-sm text-muted-foreground", "Lade Verlauf…")
     );
@@ -1583,10 +1696,9 @@
       upsertConversation(conv);
       pickedUsers.clear();
       renderPicked();
-      userSearchDesktop.value = "";
-      userSearchMobile.value = "";
-      searchResultsDesktop.replaceChildren();
-      searchResultsMobile.replaceChildren();
+      userSearch.value = "";
+      userSearchResults.replaceChildren();
+      setNewChatPanel(false);
       await openConversation(conv.id);
     } catch (err) {
       showError(chatError, err.message);
@@ -1595,49 +1707,40 @@
 
   function renderOnlineUsers(users) {
     const count = users.length;
-    onlineCountDesktop.textContent = `(${count})`;
-    onlineCountMobile.textContent = `${count} online`;
+    onlineCount.textContent = `(${count})`;
     onlineIds.clear();
     for (const user of users) onlineIds.add(user.id);
-    updateRoomHeader();
+    if (chatSelected) updateRoomHeader();
 
-    function fill(list) {
-      list.replaceChildren();
-      for (const user of users) {
-        const isSelf = currentUser && user.id === currentUser.id;
-        const item = el("li", "");
-        const btn = el(
-          "button",
-          "flex min-h-11 w-full items-center gap-2 rounded-xl px-2 py-1 text-left hover:bg-muted whitespace-normal"
-        );
-        btn.type = "button";
-        btn.disabled = Boolean(isSelf);
-        const avatar = el("div", "");
-        fillAvatar(avatar, user, "h-8 w-8");
-        const dot = el("span", "h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-400");
-        dot.setAttribute("aria-hidden", "true");
-        const text = el("span", "min-w-0 flex-1");
-        text.append(el("span", "block break-words text-sm text-foreground", displayName(user)));
-        if (user.realName) {
-          text.append(el("span", "block text-xs text-muted-foreground", `@${user.username}`));
-        }
-        if (isSelf) {
-          text.append(el("span", "block text-xs text-muted-foreground", "(du)"));
-        }
-        btn.append(dot, avatar, text);
-        if (!isSelf) {
-          btn.addEventListener("click", () => {
-            setOnlinePanel(false);
-            startConversationWith([user.username]);
-          });
-        }
-        item.append(btn);
-        list.append(item);
+    userList.replaceChildren();
+    for (const user of users) {
+      const isSelf = currentUser && user.id === currentUser.id;
+      const item = el("li", "");
+      const btn = el(
+        "button",
+        "flex min-h-14 w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-muted whitespace-normal"
+      );
+      btn.type = "button";
+      btn.disabled = Boolean(isSelf);
+      const avatar = el("div", "");
+      fillAvatar(avatar, user, "h-12 w-12");
+      const dot = el("span", "h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-400");
+      dot.setAttribute("aria-hidden", "true");
+      const text = el("span", "min-w-0 flex-1");
+      text.append(el("span", "block break-words text-sm font-medium text-foreground", displayName(user)));
+      if (user.realName) {
+        text.append(el("span", "block text-xs text-muted-foreground", `@${user.username}`));
       }
+      if (isSelf) {
+        text.append(el("span", "block text-xs text-muted-foreground", "(du)"));
+      }
+      btn.append(dot, avatar, text);
+      if (!isSelf) {
+        btn.addEventListener("click", () => startConversationWith([user.username]));
+      }
+      item.append(btn);
+      userList.append(item);
     }
-
-    fill(userListDesktop);
-    fill(userListMobile);
   }
 
   function setOverlay(overlay, open) {
@@ -1645,17 +1748,20 @@
     overlay.hidden = !open;
   }
 
-  function setOnlinePanel(open) {
-    setOverlay(onlineOverlay, open);
-    btnOnline.setAttribute("aria-expanded", String(open));
-    if (open) btnOnlineClose.focus();
+  function setNewChatPanel(open) {
+    setOverlay(newChatOverlay, open);
+    if (open) userSearch.focus();
   }
 
-  function setNavPanel(open) {
-    setOverlay(navOverlay, open);
-    btnNav.setAttribute("aria-expanded", String(open));
-    if (open) btnNavClose.focus();
+  function setMorePanel(open) {
+    setOverlay(moreOverlay, open);
   }
+
+  function setOnlinePanel(_open) {
+    setListTab("contacts");
+  }
+
+  function setNavPanel(_open) {}
 
   function setProfilePanel(open) {
     setOverlay(profileOverlay, open);
@@ -1671,65 +1777,55 @@
   }
 
   function renderPicked() {
-    function fill(list) {
-      list.replaceChildren();
-      for (const user of pickedUsers.values()) {
-        const chip = el(
-          "li",
-          "inline-flex min-h-11 items-center gap-1 rounded-full bg-muted px-3 text-sm"
-        );
-        chip.append(el("span", "break-words", displayName(user)));
-        const remove = el("button", "inline-flex h-11 min-h-11 w-11 items-center justify-center rounded-full text-muted-foreground");
-        remove.type = "button";
-        remove.setAttribute("aria-label", `${displayName(user)} entfernen`);
-        remove.textContent = "×";
-        remove.addEventListener("click", () => {
-          pickedUsers.delete(user.username);
-          renderPicked();
-        });
-        chip.append(remove);
-        list.append(chip);
-      }
+    searchPicked.replaceChildren();
+    for (const user of pickedUsers.values()) {
+      const chip = el(
+        "li",
+        "inline-flex min-h-11 items-center gap-1 rounded-full bg-muted px-3 text-sm"
+      );
+      chip.append(el("span", "break-words", displayName(user)));
+      const remove = el("button", "inline-flex h-11 min-h-11 w-11 items-center justify-center rounded-full text-muted-foreground");
+      remove.type = "button";
+      remove.setAttribute("aria-label", `${displayName(user)} entfernen`);
+      remove.textContent = "×";
+      remove.addEventListener("click", () => {
+        pickedUsers.delete(user.username);
+        renderPicked();
+      });
+      chip.append(remove);
+      searchPicked.append(chip);
     }
-    fill(searchPickedDesktop);
-    fill(searchPickedMobile);
     const show = pickedUsers.size > 0;
-    btnStartChatDesktop.classList.toggle("hidden", !show);
-    btnStartChatDesktop.classList.toggle("flex", show);
-    btnStartChatMobile.classList.toggle("hidden", !show);
-    btnStartChatMobile.classList.toggle("flex", show);
+    btnStartChat.classList.toggle("hidden", !show);
+    btnStartChat.classList.toggle("flex", show);
   }
 
   function renderSearchResults(users) {
-    function fill(list) {
-      list.replaceChildren();
-      for (const user of users) {
-        if (pickedUsers.has(user.username)) continue;
-        const item = el("li", "");
-        const btn = el(
-          "button",
-          "flex min-h-11 w-full items-center gap-2 rounded-xl px-2 py-1 text-left hover:bg-muted whitespace-normal"
-        );
-        btn.type = "button";
-        const avatar = el("div", "");
-        fillAvatar(avatar, user, "h-8 w-8");
-        const text = el("span", "min-w-0");
-        text.append(el("span", "block break-words text-sm", displayName(user)));
-        if (user.realName) {
-          text.append(el("span", "block text-xs text-muted-foreground", `@${user.username}`));
-        }
-        btn.append(avatar, text);
-        btn.addEventListener("click", () => {
-          pickedUsers.set(user.username, user);
-          renderPicked();
-          renderSearchResults(users);
-        });
-        item.append(btn);
-        list.append(item);
+    userSearchResults.replaceChildren();
+    for (const user of users) {
+      if (pickedUsers.has(user.username)) continue;
+      const item = el("li", "");
+      const btn = el(
+        "button",
+        "flex min-h-11 w-full items-center gap-2 rounded-xl px-2 py-1 text-left hover:bg-muted whitespace-normal"
+      );
+      btn.type = "button";
+      const avatar = el("div", "");
+      fillAvatar(avatar, user, "h-8 w-8");
+      const text = el("span", "min-w-0");
+      text.append(el("span", "block break-words text-sm", displayName(user)));
+      if (user.realName) {
+        text.append(el("span", "block text-xs text-muted-foreground", `@${user.username}`));
       }
+      btn.append(avatar, text);
+      btn.addEventListener("click", () => {
+        pickedUsers.set(user.username, user);
+        renderPicked();
+        renderSearchResults(users);
+      });
+      item.append(btn);
+      userSearchResults.append(item);
     }
-    fill(searchResultsDesktop);
-    fill(searchResultsMobile);
   }
 
   async function searchUsers(query) {
@@ -1817,7 +1913,7 @@
       const id = payload?.conversationId;
       conversations = conversations.filter((c) => c.id !== id);
       renderConversationLists();
-      if (Number(id) === Number(activeConversationId)) openGlobal();
+      if (Number(id) === Number(activeConversationId)) closeThread();
     });
 
     socket.on("message:deleted", (message) => {
@@ -2286,15 +2382,22 @@
   btnAdminLogout.addEventListener("click", handleLogout);
   tabAdminPending.addEventListener("click", () => setAdminFilter("pending"));
   tabAdminAll.addEventListener("click", () => setAdminFilter("all"));
-  btnOnline.addEventListener("click", () => setOnlinePanel(true));
-  btnOnlineClose.addEventListener("click", () => setOnlinePanel(false));
-  onlineBackdrop.addEventListener("click", () => setOnlinePanel(false));
-  btnNav.addEventListener("click", () => setNavPanel(true));
-  btnNavClose.addEventListener("click", () => setNavPanel(false));
-  navBackdrop.addEventListener("click", () => setNavPanel(false));
-  btnGlobalDesktop.addEventListener("click", openGlobal);
-  btnGlobalMobile.addEventListener("click", openGlobal);
-  btnProfile.addEventListener("click", () => setProfilePanel(true));
+  btnBack.addEventListener("click", closeThread);
+  btnNewChat.addEventListener("click", () => setNewChatPanel(true));
+  btnNewChatClose.addEventListener("click", () => setNewChatPanel(false));
+  newChatBackdrop.addEventListener("click", () => setNewChatPanel(false));
+  btnMore.addEventListener("click", () => setMorePanel(true));
+  btnMoreClose.addEventListener("click", () => setMorePanel(false));
+  moreBackdrop.addEventListener("click", () => setMorePanel(false));
+  navMore.addEventListener("click", () => setMorePanel(true));
+  navChats.addEventListener("click", () => setListTab("chats"));
+  navContacts.addEventListener("click", () => setListTab("contacts"));
+  tabListChats.addEventListener("click", () => setListTab("chats"));
+  tabListContacts.addEventListener("click", () => setListTab("contacts"));
+  btnProfile.addEventListener("click", () => {
+    setMorePanel(false);
+    setProfilePanel(true);
+  });
   btnProfileClose.addEventListener("click", () => setProfilePanel(false));
   profileBackdrop.addEventListener("click", () => setProfilePanel(false));
   formProfile.addEventListener("submit", handleProfileSubmit);
@@ -2383,8 +2486,6 @@
       showError(chatError, err.message);
     }
   });
-  btnAssistantDesktop.addEventListener("click", openAssistant);
-  btnAssistantMobile.addEventListener("click", openAssistant);
   btnForwardClose.addEventListener("click", () => setForwardPanel(false));
   forwardBackdrop.addEventListener("click", () => setForwardPanel(false));
   messageMenuBackdrop.addEventListener("click", () => {
@@ -2416,24 +2517,12 @@
     true
   );
 
-  formSearchDesktop.addEventListener("submit", (event) => {
+  formUserSearch.addEventListener("submit", (event) => {
     event.preventDefault();
     startConversationWith([...pickedUsers.keys()]);
   });
-  formSearchMobile.addEventListener("submit", (event) => {
-    event.preventDefault();
-    startConversationWith([...pickedUsers.keys()]);
-  });
-  userSearchDesktop.addEventListener("input", () => {
-    userSearchMobile.value = userSearchDesktop.value;
-    scheduleSearch(userSearchDesktop.value);
-  });
-  userSearchMobile.addEventListener("input", () => {
-    userSearchDesktop.value = userSearchMobile.value;
-    scheduleSearch(userSearchMobile.value);
-  });
-  userSearchDesktop.addEventListener("focus", () => scheduleSearch(userSearchDesktop.value));
-  userSearchMobile.addEventListener("focus", () => scheduleSearch(userSearchMobile.value));
+  userSearch.addEventListener("input", () => scheduleSearch(userSearch.value));
+  userSearch.addEventListener("focus", () => scheduleSearch(userSearch.value));
 
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
@@ -2443,13 +2532,38 @@
     else if (!searchOverlay.hidden) setSearchPanel(false);
     else if (!chatMenuOverlay.hidden) setChatMenu(false);
     else if (!profileOverlay.hidden) setProfilePanel(false);
-    else if (!onlineOverlay.hidden) setOnlinePanel(false);
-    else if (!navOverlay.hidden) setNavPanel(false);
+    else if (!newChatOverlay.hidden) setNewChatPanel(false);
+    else if (!moreOverlay.hidden) setMorePanel(false);
     else if (attachTray && !attachTray.hidden) setAttachTray(false);
     else if (replyTarget) setReplyTarget(null);
     else if (mediaRecorder) stopRecording(false);
+    else if (chatSelected && !isWideLayout()) closeThread();
   });
 
+  window.addEventListener("resize", updatePanes);
+  window.addEventListener("popstate", () => {
+    if (chatSelected && !isWideLayout()) closeThread(true);
+  });
+  window.visualViewport?.addEventListener("resize", syncAppHeight);
+  window.visualViewport?.addEventListener("scroll", syncAppHeight);
+  window.addEventListener("resize", syncAppHeight);
+
+  function syncAppHeight() {
+    const viewport = window.visualViewport;
+    const height = viewport ? Math.round(viewport.height) : window.innerHeight;
+    document.documentElement.style.setProperty("--app-height", `${height}px`);
+  }
+
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("/sw.js").catch(() => {
+        // PWA-Hülle ist optional, Chat läuft ohne Service Worker.
+      });
+    });
+  }
+
+  syncAppHeight();
+  setListTab("chats");
   setAuthMode("login");
   restoreSession();
 })();

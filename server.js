@@ -1198,6 +1198,8 @@ app.use(
         imgSrc: ["'self'", "data:", "https:", "http:"],
         mediaSrc: ["'self'"],
         connectSrc: ["'self'", "ws:", "wss:"],
+        workerSrc: ["'self'"],
+        manifestSrc: ["'self'"],
         objectSrc: ["'none'"],
         baseUri: ["'self'"],
         formAction: ["'self'"],
@@ -1210,7 +1212,20 @@ app.use(
 
 app.use(express.json({ limit: "64kb" }));
 app.use(cookieParser());
-app.use(express.static(path.join(__dirname, "public"), { index: false }));
+app.use(
+  express.static(path.join(__dirname, "public"), {
+    index: false,
+    setHeaders(res, filePath) {
+      if (filePath.endsWith(`${path.sep}sw.js`)) {
+        res.setHeader("Cache-Control", "no-cache");
+        res.setHeader("Service-Worker-Allowed", "/");
+      }
+      if (filePath.endsWith(".webmanifest")) {
+        res.setHeader("Content-Type", "application/manifest+json; charset=utf-8");
+      }
+    },
+  })
+);
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
