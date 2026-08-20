@@ -850,11 +850,14 @@
                 class="mb-2 hidden items-center justify-between gap-3 rounded-xl bg-red-100 px-3 py-2 ring-1 ring-red-200 dark:bg-red-950/50 dark:ring-red-900"
                 role="status"
               >
-                <p class="flex items-center gap-2 text-sm text-red-800 dark:text-red-100">
-                  <span class="rec-dot inline-block h-2.5 w-2.5 rounded-full bg-red-400" aria-hidden="true"></span>
-                  Aufnahme
-                  <span id="record-timer">0:00</span>
-                </p>
+                <div class="min-w-0 flex-1">
+                  <p class="flex items-center gap-2 text-sm text-red-800 dark:text-red-100">
+                    <span class="rec-dot inline-block h-2.5 w-2.5 rounded-full bg-red-400" aria-hidden="true"></span>
+                    Aufnahme
+                    <span id="record-timer">0:00</span>
+                  </p>
+                  <canvas id="record-wave" class="mt-2 h-8 w-full" width="320" height="32" aria-hidden="true"></canvas>
+                </div>
                 <div class="flex gap-2">
                   <button
                     type="button"
@@ -1006,7 +1009,7 @@
                 </button>
               </div>
               <input id="input-image" type="file" accept="image/jpeg,image/png,image/webp,image/gif" class="sr-only" />
-              <input id="input-file" type="file" accept="application/pdf,application/zip,.pdf,.zip" class="sr-only" />
+              <input id="input-file" type="file" accept=".pdf,.zip,.7z,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.odt,.ods,.odp,.rtf,.txt,.csv,application/pdf,application/zip,application/msword,text/plain,text/csv" class="sr-only" />
               <input id="input-video" type="file" accept="video/mp4,video/webm,video/quicktime" class="sr-only" />
             </form>
           </div>
@@ -1571,6 +1574,36 @@
           <ul id="forward-targets" class="flex max-h-80 flex-col gap-1 overflow-y-auto"></ul>
         </section>
       </div>
+    </div>
+
+    <div id="lightbox-overlay" class="fixed inset-0 z-[90] hidden bg-black/90" hidden>
+      <button
+        type="button"
+        id="lightbox-close"
+        class="absolute right-3 top-3 z-10 inline-flex h-11 min-h-11 items-center rounded-xl bg-card/90 px-3 text-sm font-medium text-foreground ring-1 ring-border"
+      >
+        Schließen
+      </button>
+      <button
+        type="button"
+        id="lightbox-prev"
+        class="absolute left-2 top-1/2 z-10 inline-flex h-11 w-11 min-h-11 -translate-y-1/2 items-center justify-center rounded-full bg-card/90 text-foreground ring-1 ring-border"
+        aria-label="Vorheriges Bild"
+      >
+        ‹
+      </button>
+      <div id="lightbox-stage" class="flex h-full w-full items-center justify-center px-14 py-16">
+        <img id="lightbox-image" alt="" class="max-h-full max-w-full object-contain" />
+      </div>
+      <button
+        type="button"
+        id="lightbox-next"
+        class="absolute right-2 top-1/2 z-10 inline-flex h-11 w-11 min-h-11 -translate-y-1/2 items-center justify-center rounded-full bg-card/90 text-foreground ring-1 ring-border"
+        aria-label="Nächstes Bild"
+      >
+        ›
+      </button>
+      <p id="lightbox-counter" class="absolute bottom-4 left-0 right-0 text-center text-sm text-primary-foreground"></p>
     </div>
 
     <div id="media-overlay" class="fixed inset-0 z-50 hidden" hidden>

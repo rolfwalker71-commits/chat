@@ -13,6 +13,42 @@
   "background_color": "#ffffff",
   "theme_color": "#fffbf5",
   "categories": ["social", "communication"],
+  "share_target": {
+    "action": "/share",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url",
+      "files": [
+        {
+          "name": "files",
+          "accept": [
+            "image/*",
+            "video/*",
+            "audio/*",
+            "application/pdf",
+            ".pdf",
+            ".zip",
+            ".7z",
+            ".doc",
+            ".docx",
+            ".xls",
+            ".xlsx",
+            ".ppt",
+            ".pptx",
+            ".odt",
+            ".ods",
+            ".odp",
+            ".rtf",
+            ".txt",
+            ".csv"
+          ]
+        }
+      ]
+    }
+  },
   "icons": [
     {
       "src": "/icons/pwa-192.png",

@@ -1,5 +1,6 @@
 /* global self, caches, fetch, clients */
-const CACHE = "mychat-shell-v30";
+const CACHE = "mychat-shell-v31";
+const SHARE_CACHE = "mychat-share";
 const PRECACHE = [
   "/",
   "/index.html",
@@ -36,15 +37,21 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key))))
+      .then((keys) =>
+        Promise.all(keys.filter((key) => key !== CACHE && key !== SHARE_CACHE).map((key) => caches.delete(key)))
+      )
       .then(() => self.clients.claim())
   );
 });
 
 self.addEventListener("fetch", (event) => {
-  if (event.request.method !== "GET") return;
-
   const url = new URL(event.request.url);
+  if (url.origin === self.location.origin && url.pathname === "/share" && event.request.method === "POST") {
+    event.respondWith(handleSharePost(event.request));
+    return;
+  }
+
+  if (event.request.method !== "GET") return;
   if (url.origin !== self.location.origin) return;
   if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/socket.io/")) return;
 
@@ -87,6 +94,79 @@ self.addEventListener("fetch", (event) => {
   );
 });
 
+async function handleSharePost(request) {
+  try {
+    const form = await request.formData();
+    const record = {
+      title: String(form.get("title") || ""),
+      text: String(form.get("text") || ""),
+      url: String(form.get("url") || ""),
+      files: [],
+    };
+    const cache = await caches.open(SHARE_CACHE);
+    const keys = await cache.keys();
+    await Promise.all(keys.map((key) => cache.delete(key)));
+    let index = 0;
+    for (const file of form.getAll("files")) {
+      if (!file || typeof file === "string" || !file.size) continue;
+      const keyUrl = `https://share.local/${index}`;
+      index += 1;
+      await cache.put(
+        keyUrl,
+        new Response(file, {
+          headers: {
+            "Content-Type": file.type || "application/octet-stream",
+            "X-Filename": encodeURIComponent(file.name || "datei"),
+          },
+        })
+      );
+      record.files.push({ key: keyUrl, name: file.name || "datei", type: file.type || "", size: file.size });
+    }
+    await cache.put("pending", new Response(JSON.stringify(record), { headers: { "Content-Type": "application/json" } }));
+  } catch (err) {
+    console.error("Share-Target im Service Worker fehlgeschlagen:", err);
+  }
+  return Response.redirect("/?share=1", 303);
+}
+
+self.addEventListener("message", (event) => {
+  if (event.data?.type === "take-share") {
+    event.waitUntil(replyShare(event.ports[0]));
+  }
+});
+
+async function replyShare(port) {
+  if (!port) return;
+  try {
+    const cache = await caches.open(SHARE_CACHE);
+    const meta = await cache.match("pending");
+    if (!meta) {
+      port.postMessage(null);
+      return;
+    }
+    const record = await meta.json();
+    const files = [];
+    for (const item of record.files || []) {
+      const stored = await cache.match(item.key);
+      if (!stored) continue;
+      files.push({
+        name: item.name,
+        type: item.type,
+        blob: await stored.blob(),
+      });
+    }
+    await Promise.all((await cache.keys()).map((key) => cache.delete(key)));
+    port.postMessage({
+      title: record.title || "",
+      text: record.text || "",
+      url: record.url || "",
+      files,
+    });
+  } catch {
+    port.postMessage(null);
+  }
+}
+
 self.addEventListener("push", (event) => {
   event.waitUntil(handlePush(event));
 });
@@ -97,6 +177,15 @@ async function handlePush(event) {
     data = event.data ? event.data.json() : {};
   } catch {
     data = { body: event.data ? event.data.text() : "" };
+  }
+
+  if (typeof data.badgeCount === "number" && self.registration.setAppBadge) {
+    try {
+      if (data.badgeCount > 0) await self.registration.setAppBadge(data.badgeCount);
+      else await self.registration.clearAppBadge();
+    } catch {
+      // Badging API ist optional.
+    }
   }
 
   const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });

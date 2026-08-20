@@ -98,9 +98,9 @@ const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_VOICE_BYTES = 2 * 1024 * 1024;
 const MAX_AVATAR_BYTES = 1 * 1024 * 1024;
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
-const MAX_VIDEO_BYTES = 16 * 1024 * 1024;
+const MAX_VIDEO_BYTES = 32 * 1024 * 1024;
 const MAX_VOICE_DURATION_MS = 60_000;
-const MAX_VIDEO_DURATION_MS = 30_000;
+const MAX_VIDEO_DURATION_MS = 60_000;
 const MAX_POLL_OPTIONS = 8;
 const MIN_POLL_OPTIONS = 2;
 const MAX_POLL_OPTION_LENGTH = 80;
@@ -117,7 +117,23 @@ const AI_READY = AI_ON && Boolean(AI_API_KEY && AI_API_KEY.trim());
 const IMAGE_MIMES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 const AVATAR_MIMES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const VOICE_MIMES = new Set(["audio/webm", "audio/ogg", "audio/mp4", "audio/mpeg"]);
-const FILE_MIMES = new Set(["application/pdf", "application/zip"]);
+const FILE_MIMES = new Set([
+  "application/pdf",
+  "application/zip",
+  "application/x-7z-compressed",
+  "application/rtf",
+  "application/msword",
+  "application/vnd.ms-excel",
+  "application/vnd.ms-powerpoint",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "application/vnd.oasis.opendocument.text",
+  "application/vnd.oasis.opendocument.spreadsheet",
+  "application/vnd.oasis.opendocument.presentation",
+  "text/plain",
+  "text/csv",
+]);
 const VIDEO_MIMES = new Set(["video/mp4", "video/webm", "video/quicktime"]);
 const MIME_EXTENSION = {
   "image/jpeg": ".jpg",
@@ -130,6 +146,19 @@ const MIME_EXTENSION = {
   "audio/mpeg": ".mp3",
   "application/pdf": ".pdf",
   "application/zip": ".zip",
+  "application/x-7z-compressed": ".7z",
+  "application/rtf": ".rtf",
+  "application/msword": ".doc",
+  "application/vnd.ms-excel": ".xls",
+  "application/vnd.ms-powerpoint": ".ppt",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+  "application/vnd.oasis.opendocument.text": ".odt",
+  "application/vnd.oasis.opendocument.spreadsheet": ".ods",
+  "application/vnd.oasis.opendocument.presentation": ".odp",
+  "text/plain": ".txt",
+  "text/csv": ".csv",
   "video/mp4": ".mp4",
   "video/webm": ".webm",
   "video/quicktime": ".mov",
@@ -545,7 +574,69 @@ function conversationRoom(id) {
 }
 
 /** Magic-Bytes statt Client-MIME — Nutzerangaben sind untrusted. */
-function detectMime(buffer, kind = "") {
+function fileNameLower(originalName) {
+  return String(originalName || "").split(/[/\\]/).pop().toLowerCase();
+}
+
+function isPlainTextBuffer(buffer) {
+  const n = Math.min(buffer.length, 4096);
+  if (!n) return false;
+  let weird = 0;
+  for (let i = 0; i < n; i += 1) {
+    const c = buffer[i];
+    if (c === 0) return false;
+    if (c < 9 || (c > 13 && c < 32)) weird += 1;
+  }
+  return weird / n < 0.05;
+}
+
+function sniffZipDocumentMime(buffer, originalName) {
+  const name = fileNameLower(originalName);
+  const head = buffer.toString("latin1", 0, Math.min(buffer.length, 16384));
+  const has = (snippet) => head.includes(snippet);
+  if (has("[Content_Types].xml")) {
+    if (has("word/")) {
+      return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    }
+    if (has("ppt/")) {
+      return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+    }
+    if (has("xl/") || has("/xl")) {
+      return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    }
+  }
+  if (has("mimetypeapplication/vnd.oasis.opendocument.text")) {
+    return "application/vnd.oasis.opendocument.text";
+  }
+  if (has("mimetypeapplication/vnd.oasis.opendocument.spreadsheet")) {
+    return "application/vnd.oasis.opendocument.spreadsheet";
+  }
+  if (has("mimetypeapplication/vnd.oasis.opendocument.presentation")) {
+    return "application/vnd.oasis.opendocument.presentation";
+  }
+  if (name.endsWith(".docx")) {
+    return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  }
+  if (name.endsWith(".xlsx")) {
+    return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  }
+  if (name.endsWith(".pptx")) {
+    return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+  }
+  if (name.endsWith(".odt")) return "application/vnd.oasis.opendocument.text";
+  if (name.endsWith(".ods")) return "application/vnd.oasis.opendocument.spreadsheet";
+  if (name.endsWith(".odp")) return "application/vnd.oasis.opendocument.presentation";
+  return "application/zip";
+}
+
+function oleMimeFromName(originalName) {
+  const name = fileNameLower(originalName);
+  if (name.endsWith(".xls")) return "application/vnd.ms-excel";
+  if (name.endsWith(".ppt")) return "application/vnd.ms-powerpoint";
+  return "application/msword";
+}
+
+function detectMime(buffer, kind = "", originalName = "") {
   if (!buffer || buffer.length < 12) return null;
   if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return "image/jpeg";
   if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) return "image/png";
@@ -565,8 +656,20 @@ function detectMime(buffer, kind = "") {
   if (buffer.toString("ascii", 0, 3) === "ID3") return "audio/mpeg";
   if (buffer[0] === 0xff && (buffer[1] & 0xe0) === 0xe0) return "audio/mpeg";
   if (buffer.toString("ascii", 0, 4) === "%PDF") return "application/pdf";
+  if (buffer.toString("ascii", 0, 5) === "{\\rtf") return "application/rtf";
+  if (buffer[0] === 0x37 && buffer[1] === 0x7a && buffer[2] === 0xbc && buffer[3] === 0xaf) {
+    return "application/x-7z-compressed";
+  }
+  if (buffer[0] === 0xd0 && buffer[1] === 0xcf && buffer[2] === 0x11 && buffer[3] === 0xe0) {
+    return oleMimeFromName(originalName);
+  }
   if (buffer[0] === 0x50 && buffer[1] === 0x4b && [0x03, 0x05, 0x07].includes(buffer[2])) {
-    return "application/zip";
+    return sniffZipDocumentMime(buffer, originalName);
+  }
+  if (kind === "file" && isPlainTextBuffer(buffer)) {
+    const name = fileNameLower(originalName);
+    if (name.endsWith(".csv")) return "text/csv";
+    if (name.endsWith(".txt") || name.endsWith(".text")) return "text/plain";
   }
   return null;
 }
@@ -1525,6 +1628,32 @@ async function countGlobalUnread(userId) {
   return countUnread(userId, null);
 }
 
+async function countTotalUnread(userId) {
+  const { rows } = await pool.query(
+    `
+    SELECT (
+      SELECT COUNT(*)::int
+      FROM messages um
+      JOIN conversation_members me
+        ON me.conversation_id = um.conversation_id AND me.user_id = $1
+      WHERE um.deleted_at IS NULL
+        AND um.user_id <> $1
+        AND (me.last_read_message_id IS NULL OR um.id > me.last_read_message_id)
+    ) + (
+      SELECT COUNT(*)::int
+      FROM messages um
+      JOIN users u ON u.id = $1
+      WHERE um.conversation_id IS NULL
+        AND um.deleted_at IS NULL
+        AND um.user_id <> $1
+        AND (u.global_last_read_message_id IS NULL OR um.id > u.global_last_read_message_id)
+    ) AS n
+    `,
+    [userId]
+  );
+  return rows[0]?.n || 0;
+}
+
 function emitToUser(userId, event, payload) {
   for (const sock of socketsForUser(userId)) {
     sock.emit(event, payload);
@@ -2063,13 +2192,17 @@ async function notifyPushForMessage(message, conversationId, senderId) {
   for (const row of recipients) {
     if (isUserViewing(row.user_id, conversationId)) continue;
     const mentioned = mentionedIds.has(row.user_id);
-    const userPayload = mentioned
-      ? {
-          ...payload,
-          title: `${displayName(message)} hat dich erwähnt`,
-          tag: `${payload.tag}-mention`,
-        }
-      : payload;
+    const badgeCount = await countTotalUnread(row.user_id);
+    const userPayload = {
+      ...(mentioned
+        ? {
+            ...payload,
+            title: `${displayName(message)} hat dich erwähnt`,
+            tag: `${payload.tag}-mention`,
+          }
+        : payload),
+      badgeCount,
+    };
     sendPushToUser(row.user_id, userPayload).catch((err) => {
       console.error("Push an Nutzer fehlgeschlagen:", err.message);
     });
@@ -2189,11 +2322,35 @@ const memoryUpload = multer({
   limits: { fileSize: MAX_VIDEO_BYTES, files: 1, fields: 8 },
 });
 
+const shareUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_VIDEO_BYTES, files: 4, fields: 8 },
+});
+
+const pendingShares = new Map();
+const PENDING_SHARE_TTL_MS = 10 * 60 * 1000;
+
+function takePendingShare(userId) {
+  const item = pendingShares.get(userId);
+  if (!item) return null;
+  pendingShares.delete(userId);
+  if (Date.now() - item.at > PENDING_SHARE_TTL_MS) return null;
+  return item;
+}
+
+function uploadKindFromMime(mime) {
+  if (IMAGE_MIMES.has(mime)) return "image";
+  if (VIDEO_MIMES.has(mime)) return "video";
+  if (VOICE_MIMES.has(mime)) return "voice";
+  if (FILE_MIMES.has(mime)) return "file";
+  return null;
+}
+
 function handleMulter(req, res, next) {
   memoryUpload.single("file")(req, res, (err) => {
     if (!err) return next();
     if (err.code === "LIMIT_FILE_SIZE") {
-      return sendError(res, 413, "Datei ist zu groß (max. 16 MB).");
+      return sendError(res, 413, `Datei ist zu groß (max. ${Math.round(MAX_VIDEO_BYTES / (1024 * 1024))} MB).`);
     }
     return sendError(res, 400, "Upload fehlgeschlagen.");
   });
@@ -2210,6 +2367,80 @@ app.get("/health", async (_req, res) => {
   } catch {
     res.status(503).json({ ok: false });
   }
+});
+
+function shareQueryRedirect(req, res, extra = {}) {
+  const q = new URLSearchParams();
+  q.set("share", "1");
+  const title = sanitizeText(String(extra.title ?? req.query.title ?? req.body?.title ?? "")).slice(0, 200);
+  const text = sanitizeText(String(extra.text ?? req.query.text ?? req.body?.text ?? "")).slice(0, 1000);
+  const link = sanitizeText(String(extra.url ?? req.query.url ?? req.body?.url ?? "")).slice(0, 500);
+  if (title) q.set("title", title);
+  if (text) q.set("text", text);
+  if (link) q.set("url", link);
+  return res.redirect(303, `/?${q.toString()}`);
+}
+
+app.get("/share", (req, res) => shareQueryRedirect(req, res));
+
+app.post("/share", (req, res, next) => {
+  shareUpload.array("files", 4)(req, res, (err) => {
+    if (err) return shareQueryRedirect(req, res);
+    next();
+  });
+}, async (req, res) => {
+  try {
+    const user = getUserFromRequest(req);
+    const title = sanitizeText(String(req.body?.title || "")).slice(0, 200);
+    const text = sanitizeText(String(req.body?.text || "")).slice(0, 1000);
+    const link = sanitizeText(String(req.body?.url || "")).slice(0, 500);
+    const files = [];
+    if (user && Array.isArray(req.files)) {
+      for (const file of req.files.slice(0, 4)) {
+        if (!file?.buffer) continue;
+        const hinted =
+          String(file.mimetype || "").startsWith("video/")
+            ? "video"
+            : String(file.mimetype || "").startsWith("audio/")
+              ? "voice"
+              : String(file.mimetype || "").startsWith("image/")
+                ? "image"
+                : "file";
+        const mime = detectMime(file.buffer, hinted, file.originalname);
+        const kind = uploadKindFromMime(mime) || hinted;
+        if (!kind) continue;
+        try {
+          const saved = await persistUpload({
+            userId: user.id,
+            kind,
+            buffer: file.buffer,
+            originalName: file.originalname,
+          });
+          files.push({ kind: saved.kind, id: saved.id, name: saved.name, mime: saved.mime });
+        } catch (err) {
+          console.error("Share-Upload übersprungen:", err.message);
+        }
+      }
+    }
+    if (user && (files.length || title || text || link)) {
+      pendingShares.set(user.id, { title, text, url: link, files, at: Date.now() });
+    }
+    return shareQueryRedirect(req, res, { title, text, url: link });
+  } catch (err) {
+    console.error("Share-Target fehlgeschlagen:", err);
+    return res.redirect(303, "/?share=1");
+  }
+});
+
+app.get("/api/share/pending", requireAuth, (req, res) => {
+  const item = takePendingShare(req.user.id);
+  if (!item) return res.json(null);
+  return res.json({
+    title: item.title || "",
+    text: item.text || "",
+    url: item.url || "",
+    files: item.files || [],
+  });
 });
 
 app.get("/api/me", requireAuth, async (req, res) => {
@@ -3375,7 +3606,7 @@ app.post("/api/ai/suggest-replies", requireAuth, async (req, res) => {
 });
 
 async function persistUpload({ userId, kind, buffer, durationMs, originalName }) {
-  const mime = detectMime(buffer, kind);
+  const mime = detectMime(buffer, kind, originalName);
   if (!mime) {
     const error = new Error("Dateityp nicht erlaubt.");
     error.status = 400;
@@ -3398,7 +3629,7 @@ async function persistUpload({ userId, kind, buffer, durationMs, originalName })
     throw error;
   }
   if (kind === "file" && !FILE_MIMES.has(mime)) {
-    const error = new Error("Anhang: nur PDF oder ZIP.");
+    const error = new Error("Anhang: PDF, ZIP, 7z, Office, RTF oder Text.");
     error.status = 400;
     throw error;
   }
@@ -3431,7 +3662,9 @@ async function persistUpload({ userId, kind, buffer, durationMs, originalName })
       const n = Number(durationMs);
       if (!Number.isFinite(n) || n < 0 || n > maxDuration + 1500) {
         const error = new Error(
-          kind === "video" ? "Video maximal 30 Sekunden." : "Sprachnachricht maximal 60 Sekunden."
+          kind === "video"
+            ? `Video maximal ${Math.round(MAX_VIDEO_DURATION_MS / 1000)} Sekunden.`
+            : "Sprachnachricht maximal 60 Sekunden."
         );
         error.status = 400;
         throw error;

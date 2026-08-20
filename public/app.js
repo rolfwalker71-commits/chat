@@ -20,8 +20,9 @@
   const MAX_MESSAGE_LENGTH = 1000;
   const USERNAME_PATTERN = /^[a-zA-Z0-9_]{3,32}$/;
   const MAX_VOICE_MS = 60_000;
-  const MAX_VIDEO_MS = 30_000;
-  const MAX_VIDEO_BYTES = 16 * 1024 * 1024;
+  const MAX_VIDEO_MS = 60_000;
+  const MAX_VIDEO_BYTES = 32 * 1024 * 1024;
+  const MAX_FILE_BYTES = 8 * 1024 * 1024;
   const PENDING_BANNER_TEXT =
     "Dein Konto wartet auf Freigabe durch einen Admin. Du kannst mitlesen, aber noch nichts senden.";
   const FILE_UUID = /^[0-9a-f-]{36}$/i;
@@ -167,6 +168,15 @@
   const btnMediaClose = document.getElementById("btn-media-close");
   const mediaList = document.getElementById("media-list");
   const mediaEmpty = document.getElementById("media-empty");
+  const lightboxOverlay = document.getElementById("lightbox-overlay");
+  const lightboxImage = document.getElementById("lightbox-image");
+  const lightboxClose = document.getElementById("lightbox-close");
+  const lightboxPrev = document.getElementById("lightbox-prev");
+  const lightboxNext = document.getElementById("lightbox-next");
+  const lightboxCounter = document.getElementById("lightbox-counter");
+  const lightboxStage = document.getElementById("lightbox-stage");
+  const recordWave = document.getElementById("record-wave");
+  const forwardTitle = document.getElementById("forward-title");
   const starredOverlay = document.getElementById("starred-overlay");
   const starredBackdrop = document.getElementById("starred-backdrop");
   const btnStarredClose = document.getElementById("btn-starred-close");
@@ -222,6 +232,15 @@
   /** @type {"login" | "register" | "admin" | "reset"} */
   let authMode = "login";
   let mentionIndex = -1;
+  /** @type {{ title?: string, text?: string, url?: string, files?: Array, apiFiles?: Array } | null} */
+  let sharePending = null;
+  let lightboxItems = [];
+  let lightboxIndex = 0;
+  let lightboxTouchX = 0;
+  const waveformCache = new Map();
+  let recordAudioCtx = null;
+  let recordAnalyser = null;
+  let recordWaveRaf = 0;
   /** @type {{ id: number, username: string, realName?: string, avatarUrl?: string, isAdmin?: boolean, isApproved?: boolean, pendingUsers?: number } | null} */
   let currentUser = null;
   /** @type {import("socket.io-client").Socket | null} */
@@ -772,6 +791,7 @@
       enablePush({ request: true }).catch(() => {});
       const deepLink = conversationFromUrl();
       if (deepLink !== undefined) await openConversation(deepLink);
+      await consumeIncomingShare();
     } catch {
       currentUser = null;
       showAuth();
@@ -844,7 +864,10 @@
       connectSocket();
       enablePush({ request: true }).catch(() => {});
       if (authMode === "admin") showAdmin();
-      else showChat();
+      else {
+        showChat();
+        await consumeIncomingShare();
+      }
     } catch (err) {
       showError(authError, err.message);
     } finally {
@@ -878,6 +901,7 @@
     chatSelected = false;
     replyTarget = null;
     globalUnread = 0;
+    syncAppBadge();
     aiStatus = null;
     hideReactionPicker();
     hideMessageMenu();
@@ -1080,6 +1104,248 @@
     const m = Math.floor(total / 60);
     const s = total % 60;
     return `${m}:${String(s).padStart(2, "0")}`;
+  }
+
+  function cssRgb(token) {
+    return getComputedStyle(document.documentElement).getPropertyValue(token).trim();
+  }
+
+  function mediaIcon(path, className) {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("class", className || "h-5 w-5");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("fill", "currentColor");
+    svg.setAttribute("aria-hidden", "true");
+    const node = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    node.setAttribute("d", path);
+    svg.append(node);
+    return svg;
+  }
+
+  function conversationImages() {
+    return [...messagesById.values()]
+      .filter((message) => message.type === "image" && message.file?.id && FILE_UUID.test(message.file.id) && !message.deleted)
+      .sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0));
+  }
+
+  function openLightboxAt(message) {
+    const items = conversationImages();
+    const index = items.findIndex((item) => item.id === message.id);
+    openLightbox(items.length ? items : [message], index >= 0 ? index : 0);
+  }
+
+  function openLightbox(items, index) {
+    lightboxItems = (items || []).filter((item) => item?.file?.id && FILE_UUID.test(item.file.id));
+    if (!lightboxItems.length) return;
+    lightboxIndex = Math.max(0, Math.min(index || 0, lightboxItems.length - 1));
+    setOverlay(lightboxOverlay, true);
+    renderLightbox();
+  }
+
+  function closeLightbox() {
+    setOverlay(lightboxOverlay, false);
+    lightboxItems = [];
+    if (lightboxImage) lightboxImage.removeAttribute("src");
+  }
+
+  function lightboxStep(delta) {
+    if (lightboxItems.length < 2) return;
+    lightboxIndex = (lightboxIndex + delta + lightboxItems.length) % lightboxItems.length;
+    renderLightbox();
+  }
+
+  function renderLightbox() {
+    const item = lightboxItems[lightboxIndex];
+    if (!item || !lightboxImage) return;
+    lightboxImage.src = `/api/files/${item.file.id}`;
+    lightboxImage.alt = item.content || "Bild";
+    if (lightboxCounter) {
+      lightboxCounter.textContent = `${lightboxIndex + 1} / ${lightboxItems.length}`;
+    }
+    const many = lightboxItems.length > 1;
+    lightboxPrev?.classList.toggle("hidden", !many);
+    lightboxNext?.classList.toggle("hidden", !many);
+  }
+
+  function drawPeaks(canvas, peaks, progress) {
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const width = canvas.width;
+    const height = canvas.height;
+    ctx.clearRect(0, 0, width, height);
+    const count = peaks?.length || 32;
+    const gap = 1;
+    const barW = Math.max(2, (width - gap * count) / count);
+    const played = `rgb(${cssRgb("--primary")})`;
+    const rest = `rgb(${cssRgb("--muted-foreground")})`;
+    for (let i = 0; i < count; i += 1) {
+      const amp = Math.max(0.12, Number(peaks?.[i]) || 0.12);
+      const barH = Math.max(3, amp * (height - 4));
+      ctx.fillStyle = i / count <= progress ? played : rest;
+      ctx.fillRect(i * (barW + gap), (height - barH) / 2, barW, barH);
+    }
+  }
+
+  async function loadVoicePeaks(fileId) {
+    if (waveformCache.has(fileId)) return waveformCache.get(fileId);
+    const pending = (async () => {
+      const response = await fetch(`/api/files/${fileId}`);
+      if (!response.ok) throw new Error("Audio nicht ladbar");
+      const buffer = await response.arrayBuffer();
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return new Float32Array(32);
+      const ctx = new Ctx();
+      const decoded = await ctx.decodeAudioData(buffer.slice(0));
+      const data = decoded.getChannelData(0);
+      const bars = 40;
+      const peaks = new Float32Array(bars);
+      const step = Math.max(1, Math.floor(data.length / bars));
+      let max = 0.0001;
+      for (let i = 0; i < bars; i += 1) {
+        let peak = 0;
+        const start = i * step;
+        for (let j = 0; j < step; j += 1) {
+          const v = Math.abs(data[start + j] || 0);
+          if (v > peak) peak = v;
+        }
+        peaks[i] = peak;
+        if (peak > max) max = peak;
+      }
+      for (let i = 0; i < bars; i += 1) peaks[i] /= max;
+      await ctx.close();
+      return peaks;
+    })().catch(() => new Float32Array(40));
+    waveformCache.set(fileId, pending);
+    return pending;
+  }
+
+  function appendVoicePlayer(parent, message) {
+    const wrap = el("div", "mt-1 flex min-h-11 items-center gap-2");
+    const play = el(
+      "button",
+      "inline-flex h-11 w-11 min-h-11 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground",
+      ""
+    );
+    play.type = "button";
+    play.setAttribute("aria-label", "Abspielen");
+    const playIcon = mediaIcon("M8 5.14v14l11-7-11-7Z");
+    const pauseIcon = mediaIcon("M6 5h4v14H6V5Zm8 0h4v14h-4V5Z");
+    play.append(playIcon);
+    const canvas = document.createElement("canvas");
+    canvas.width = 240;
+    canvas.height = 44;
+    canvas.className = "h-11 min-w-0 flex-1 cursor-pointer";
+    canvas.setAttribute("role", "slider");
+    canvas.setAttribute("aria-label", "Wiedergabeposition");
+    const time = el(
+      "span",
+      "w-10 shrink-0 text-right text-xs tabular-nums text-muted-foreground",
+      formatDuration(message.file.durationMs || 0)
+    );
+    const audio = document.createElement("audio");
+    audio.preload = "metadata";
+    audio.src = `/api/files/${message.file.id}`;
+    audio.className = "sr-only";
+    let peaks = null;
+
+    function progress() {
+      const dur = audio.duration || (message.file.durationMs || 0) / 1000;
+      if (!dur) return 0;
+      return audio.currentTime / dur;
+    }
+
+    function paint() {
+      drawPeaks(canvas, peaks, progress());
+    }
+
+    loadVoicePeaks(message.file.id).then((loaded) => {
+      peaks = loaded;
+      paint();
+    });
+    paint();
+
+    play.addEventListener("click", async () => {
+      try {
+        if (audio.paused) {
+          await audio.play();
+          play.replaceChildren(pauseIcon);
+          play.setAttribute("aria-label", "Pause");
+        } else {
+          audio.pause();
+          play.replaceChildren(playIcon);
+          play.setAttribute("aria-label", "Abspielen");
+        }
+      } catch {
+        showError(chatError, "Wiedergabe nicht möglich.");
+      }
+    });
+    audio.addEventListener("timeupdate", () => {
+      paint();
+      const dur = audio.duration || (message.file.durationMs || 0) / 1000;
+      const left = Math.max(0, (dur - audio.currentTime) * 1000);
+      time.textContent = formatDuration(audio.paused && audio.currentTime === 0 ? dur * 1000 : left);
+    });
+    audio.addEventListener("ended", () => {
+      play.replaceChildren(playIcon);
+      play.setAttribute("aria-label", "Abspielen");
+      paint();
+    });
+    canvas.addEventListener("click", (event) => {
+      const rect = canvas.getBoundingClientRect();
+      const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
+      const dur = audio.duration || (message.file.durationMs || 0) / 1000;
+      if (dur) audio.currentTime = ratio * dur;
+    });
+    wrap.append(play, canvas, time, audio);
+    parent.append(wrap);
+    if (message.transcript) {
+      parent.append(el("p", "mt-2 break-words text-sm text-muted-foreground", message.transcript));
+    }
+  }
+
+  function stopRecordWave() {
+    if (recordWaveRaf) window.cancelAnimationFrame(recordWaveRaf);
+    recordWaveRaf = 0;
+    recordAnalyser = null;
+    if (recordAudioCtx) {
+      recordAudioCtx.close().catch(() => {});
+      recordAudioCtx = null;
+    }
+  }
+
+  function startRecordWave(stream) {
+    stopRecordWave();
+    if (!recordWave || !stream) return;
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    try {
+      recordAudioCtx = new Ctx();
+      const source = recordAudioCtx.createMediaStreamSource(stream);
+      recordAnalyser = recordAudioCtx.createAnalyser();
+      recordAnalyser.fftSize = 64;
+      source.connect(recordAnalyser);
+      const data = new Uint8Array(recordAnalyser.fftSize);
+      const tick = () => {
+        if (!recordAnalyser) return;
+        recordAnalyser.getByteTimeDomainData(data);
+        const peaks = new Float32Array(24);
+        const step = Math.floor(data.length / peaks.length);
+        for (let i = 0; i < peaks.length; i += 1) {
+          let peak = 0;
+          for (let j = 0; j < step; j += 1) {
+            const v = Math.abs((data[i * step + j] || 128) - 128) / 128;
+            if (v > peak) peak = v;
+          }
+          peaks[i] = peak;
+        }
+        drawPeaks(recordWave, peaks, 1);
+        recordWaveRaf = window.requestAnimationFrame(tick);
+      };
+      tick();
+    } catch {
+      stopRecordWave();
+    }
   }
 
   function osmUrl(lat, lng) {
@@ -1287,16 +1553,21 @@
 
   function setForwardPanel(open) {
     setOverlay(forwardOverlay, open);
-    if (!open) forwardMessageId = null;
+    if (!open) {
+      forwardMessageId = null;
+      if (sharePending) {
+        applyShareTextToComposer(sharePending);
+        sharePending = null;
+      }
+      if (forwardTitle) forwardTitle.textContent = "Weiterleiten an";
+    }
   }
 
-  function openForward(messageId) {
-    forwardMessageId = messageId;
+  function fillForwardTargets(onPick) {
     forwardTargets.replaceChildren();
     const targets = conversations.filter((conv) => !isAssistantConversation(conv));
     if (!targets.length) {
-      forwardTargets.append(el("li", "px-3 py-3 text-sm text-muted-foreground", "Keine Chats zum Weiterleiten."));
-      setForwardPanel(true);
+      forwardTargets.append(el("li", "px-3 py-3 text-sm text-muted-foreground", "Keine Chats zum Teilen."));
       return;
     }
     for (const conv of targets) {
@@ -1307,10 +1578,17 @@
         conversationLabel(conv)
       );
       btn.type = "button";
-      btn.addEventListener("click", () => forwardTo(conv.id));
+      btn.addEventListener("click", () => onPick(conv.id));
       item.append(btn);
       forwardTargets.append(item);
     }
+  }
+
+  function openForward(messageId) {
+    sharePending = null;
+    forwardMessageId = messageId;
+    if (forwardTitle) forwardTitle.textContent = "Weiterleiten an";
+    fillForwardTargets((conversationId) => forwardTo(conversationId));
     setForwardPanel(true);
   }
 
@@ -1321,6 +1599,134 @@
       if (!ack?.ok) showError(chatError, ack?.error || "Weiterleiten fehlgeschlagen.");
       else if (conversationId != null) openConversation(conversationId);
     });
+  }
+
+  function shareCaption(pending) {
+    const parts = [pending?.title, pending?.text, pending?.url]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+    return [...new Set(parts)].join("\n").slice(0, MAX_MESSAGE_LENGTH);
+  }
+
+  function applyShareTextToComposer(pending) {
+    const caption = shareCaption(pending);
+    if (caption && !messageInput.value.trim()) messageInput.value = caption;
+  }
+
+  function kindFromShareFile(file) {
+    const type = String(file.type || "").toLowerCase();
+    if (type.startsWith("image/")) return "image";
+    if (type.startsWith("video/")) return "video";
+    if (type.startsWith("audio/")) return "voice";
+    return "file";
+  }
+
+  function openSharePicker() {
+    if (!sharePending) return;
+    forwardMessageId = null;
+    if (forwardTitle) forwardTitle.textContent = "Teilen nach";
+    fillForwardTargets((conversationId) => {
+      sendShareToConversation(conversationId);
+    });
+    setOverlay(forwardOverlay, true);
+  }
+
+  async function sendShareToConversation(conversationId) {
+    const pending = sharePending;
+    sharePending = null;
+    setOverlay(forwardOverlay, false);
+    if (forwardTitle) forwardTitle.textContent = "Weiterleiten an";
+    if (!pending) return;
+    await openConversation(conversationId);
+    const caption = shareCaption(pending);
+    try {
+      if (pending.apiFiles?.length) {
+        for (const [index, file] of pending.apiFiles.entries()) {
+          await emitMessage({ type: file.kind, uploadId: file.id, content: index === 0 ? caption : "" });
+        }
+        return;
+      }
+      if (pending.files?.length) {
+        for (const [index, item] of pending.files.entries()) {
+          const blob = item.blob;
+          const file = new File([blob], item.name || "datei", { type: item.type || blob.type || "" });
+          const kind = kindFromShareFile(file);
+          const content = index === 0 ? caption : "";
+          if (kind === "video") {
+            if (file.size > MAX_VIDEO_BYTES) {
+              throw new Error(`Video ist zu groß (max. ${Math.round(MAX_VIDEO_BYTES / (1024 * 1024))} MB).`);
+            }
+            const durationMs = await readVideoDuration(file);
+            if (durationMs > MAX_VIDEO_MS + 500) {
+              throw new Error(`Video maximal ${Math.round(MAX_VIDEO_MS / 1000)} Sekunden.`);
+            }
+            const saved = await uploadFile(kind, file, { durationMs });
+            await emitMessage({ type: kind, uploadId: saved.id, content });
+          } else {
+            if (kind === "file" && file.size > MAX_FILE_BYTES) {
+              throw new Error("Datei ist zu groß (max. 8 MB).");
+            }
+            const saved = await uploadFile(kind, file);
+            await emitMessage({ type: kind, uploadId: saved.id, content });
+          }
+        }
+        return;
+      }
+      if (caption) await emitMessage({ type: "text", content: caption });
+    } catch (err) {
+      showError(chatError, err.message);
+      applyShareTextToComposer(pending);
+    }
+  }
+
+  async function takeShareFromSw() {
+    const worker = navigator.serviceWorker?.controller;
+    if (!worker) return null;
+    return new Promise((resolve) => {
+      const channel = new MessageChannel();
+      const timer = window.setTimeout(() => resolve(null), 2500);
+      channel.port1.onmessage = (event) => {
+        window.clearTimeout(timer);
+        resolve(event.data || null);
+      };
+      worker.postMessage({ type: "take-share" }, [channel.port2]);
+    });
+  }
+
+  async function consumeIncomingShare() {
+    if (!currentUser) return;
+    const params = new URLSearchParams(window.location.search);
+    const flagged = params.get("share") === "1";
+    const fromQuery = {
+      title: flagged ? params.get("title") || "" : "",
+      text: flagged ? params.get("text") || "" : "",
+      url: flagged ? params.get("url") || "" : "",
+    };
+    if (flagged) history.replaceState({}, "", window.location.pathname || "/");
+    let fromSw = null;
+    try {
+      fromSw = await takeShareFromSw();
+    } catch {
+      fromSw = null;
+    }
+    let fromApi = null;
+    try {
+      fromApi = await api("/api/share/pending");
+    } catch {
+      fromApi = null;
+    }
+    const pending = {
+      title: fromSw?.title || fromApi?.title || fromQuery.title,
+      text: fromSw?.text || fromApi?.text || fromQuery.text,
+      url: fromSw?.url || fromApi?.url || fromQuery.url,
+      files: fromSw?.files || [],
+      apiFiles: fromApi?.files || [],
+    };
+    if (!pending.title && !pending.text && !pending.url && !pending.files.length && !pending.apiFiles.length) {
+      return;
+    }
+    sharePending = pending;
+    openSharePicker();
   }
 
   async function loadSmartReplies() {
@@ -2024,35 +2430,22 @@
     } else {
       const type = message.type || "text";
       if (type === "image" && message.file?.id && FILE_UUID.test(message.file.id)) {
-        const link = document.createElement("a");
-        link.href = `/api/files/${message.file.id}`;
-        link.target = "_blank";
-        link.rel = "noopener noreferrer";
-        link.className = "mt-1 block";
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "mt-1 block max-w-full";
+        btn.setAttribute("aria-label", "Bild vergrößern");
         const img = document.createElement("img");
         img.alt = message.content || "Gesendetes Bild";
         img.className = "max-h-72 max-w-full rounded-xl object-contain";
         img.src = `/api/files/${message.file.id}`;
-        link.append(img);
-        bubble.append(link);
+        btn.append(img);
+        btn.addEventListener("click", () => openLightboxAt(message));
+        bubble.append(btn);
         if (message.content && message.content !== "Bild") {
           appendMessageText(bubble, message, "mt-2 break-words text-sm");
         }
       } else if (type === "voice" && message.file?.id && FILE_UUID.test(message.file.id)) {
-        const audio = document.createElement("audio");
-        audio.controls = true;
-        audio.preload = "metadata";
-        audio.className = "mt-1 w-full";
-        audio.src = `/api/files/${message.file.id}`;
-        bubble.append(audio);
-        if (message.file.durationMs) {
-          bubble.append(
-            el("p", "mt-1 text-xs text-muted-foreground", formatDuration(message.file.durationMs))
-          );
-        }
-        if (message.transcript) {
-          bubble.append(el("p", "mt-2 break-words text-sm text-muted-foreground", message.transcript));
-        }
+        appendVoicePlayer(bubble, message);
       } else if (type === "file" && message.file?.id && FILE_UUID.test(message.file.id)) {
         const link = document.createElement("a");
         link.href = `/api/files/${message.file.id}`;
@@ -2132,7 +2525,7 @@
         video.controls = true;
         video.playsInline = true;
         video.preload = "metadata";
-        video.className = "mt-1 max-h-72 w-full rounded-xl bg-black";
+        video.className = "mt-1 max-h-96 w-full rounded-xl bg-black";
         video.src = `/api/files/${message.file.id}`;
         bubble.append(video);
         if (message.file.durationMs) {
@@ -2262,9 +2655,26 @@
     );
   }
 
+  function totalUnreadCount() {
+    let n = Number(globalUnread) || 0;
+    for (const conv of conversations) n += Number(conv.unreadCount) || 0;
+    return n;
+  }
+
+  function syncAppBadge() {
+    const n = totalUnreadCount();
+    try {
+      if (n > 0 && navigator.setAppBadge) navigator.setAppBadge(n);
+      else if (navigator.clearAppBadge) navigator.clearAppBadge();
+    } catch {
+      // Badging API ist optional.
+    }
+  }
+
   function setGlobalUnread(count) {
     globalUnread = Number(count) || 0;
     renderConversationLists();
+    syncAppBadge();
   }
 
   function applyUnread({ conversationId, unreadCount }) {
@@ -2279,6 +2689,7 @@
     }
     conv.unreadCount = Number(unreadCount) || 0;
     renderConversationLists();
+    syncAppBadge();
   }
 
   function renderHistory(messages) {
@@ -2581,6 +2992,7 @@
           "Noch keine Chats. Tippe +, um eine Unterhaltung zu starten."
         )
       );
+      syncAppBadge();
       return;
     }
 
@@ -2603,6 +3015,7 @@
         },
       });
     }
+    syncAppBadge();
   }
 
   function sortConversations() {
@@ -3464,6 +3877,7 @@
     window.clearTimeout(recordStopTimer);
     recordInterval = null;
     recordStopTimer = null;
+    stopRecordWave();
     recordBar.classList.add("hidden");
     recordBar.classList.remove("flex");
     btnAttachVoice.disabled = false;
@@ -3527,6 +3941,7 @@
         recordTimer.textContent = formatDuration(Date.now() - recordStartedAt);
       }, 200);
       recordStopTimer = window.setTimeout(() => stopRecording(true), MAX_VOICE_MS);
+      startRecordWave(recordStream);
       startVoiceTranscript();
     } catch {
       stopTracks();
@@ -3562,6 +3977,10 @@
     event.target.value = "";
     if (!file) return;
     showError(chatError, "");
+    if (file.size > MAX_FILE_BYTES) {
+      showError(chatError, "Datei ist zu groß (max. 8 MB).");
+      return;
+    }
     btnAttachFile.disabled = true;
     try {
       const saved = await uploadFile("file", file);
@@ -3599,14 +4018,14 @@
     if (!file) return;
     showError(chatError, "");
     if (file.size > MAX_VIDEO_BYTES) {
-      showError(chatError, "Video ist zu groß (max. 16 MB).");
+      showError(chatError, `Video ist zu groß (max. ${Math.round(MAX_VIDEO_BYTES / (1024 * 1024))} MB).`);
       return;
     }
     btnAttachVideo.disabled = true;
     try {
       const durationMs = await readVideoDuration(file);
       if (durationMs > MAX_VIDEO_MS + 500) {
-        showError(chatError, "Video maximal 30 Sekunden.");
+        showError(chatError, `Video maximal ${Math.round(MAX_VIDEO_MS / 1000)} Sekunden.`);
         return;
       }
       const saved = await uploadFile("video", file, { durationMs });
@@ -3639,17 +4058,21 @@
       for (const message of items) {
         const li = el("li", "");
         if (message.type === "image" && message.file?.id) {
-          const link = document.createElement("a");
-          link.href = `/api/files/${message.file.id}`;
-          link.target = "_blank";
-          link.rel = "noopener noreferrer";
-          link.className = "block overflow-hidden rounded-xl bg-muted";
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "block w-full overflow-hidden rounded-xl bg-muted";
+          btn.setAttribute("aria-label", "Bild vergrößern");
           const img = document.createElement("img");
           img.src = `/api/files/${message.file.id}`;
           img.alt = message.content || "Bild";
           img.className = "h-24 w-full object-cover";
-          link.append(img);
-          li.append(link);
+          btn.append(img);
+          btn.addEventListener("click", () => {
+            const images = items.filter((item) => item.type === "image" && item.file?.id);
+            const index = images.findIndex((item) => item.id === message.id);
+            openLightbox(images, index >= 0 ? index : 0);
+          });
+          li.append(btn);
         } else {
           li.className = "col-span-3";
           const btn = el("button", "flex min-h-11 w-full items-center rounded-xl px-2 text-left text-sm hover:bg-muted");
@@ -4250,6 +4673,29 @@
   btnBlockUser.addEventListener("click", toggleBlockUser);
   btnMediaClose.addEventListener("click", () => setMediaPanel(false));
   mediaBackdrop.addEventListener("click", () => setMediaPanel(false));
+  lightboxClose?.addEventListener("click", () => closeLightbox());
+  lightboxOverlay?.addEventListener("click", (event) => {
+    if (event.target === lightboxOverlay || event.target === lightboxStage) closeLightbox();
+  });
+  lightboxPrev?.addEventListener("click", () => lightboxStep(-1));
+  lightboxNext?.addEventListener("click", () => lightboxStep(1));
+  lightboxStage?.addEventListener(
+    "touchstart",
+    (event) => {
+      lightboxTouchX = event.changedTouches[0]?.clientX || 0;
+    },
+    { passive: true }
+  );
+  lightboxStage?.addEventListener(
+    "touchend",
+    (event) => {
+      const x = event.changedTouches[0]?.clientX || 0;
+      const dx = x - lightboxTouchX;
+      if (dx > 48) lightboxStep(-1);
+      else if (dx < -48) lightboxStep(1);
+    },
+    { passive: true }
+  );
   btnStarred.addEventListener("click", () => {
     setMorePanel(false);
     setStarredPanel(true);
@@ -4420,6 +4866,12 @@
   userSearch.addEventListener("focus", () => scheduleSearch(userSearch.value));
 
   document.addEventListener("keydown", (event) => {
+    if (lightboxOverlay && !lightboxOverlay.hidden) {
+      if (event.key === "Escape") closeLightbox();
+      else if (event.key === "ArrowLeft") lightboxStep(-1);
+      else if (event.key === "ArrowRight") lightboxStep(1);
+      return;
+    }
     if (event.key !== "Escape") return;
     if (reactionPicker) hideReactionPicker();
     else if (messageMenuOverlay && !messageMenuOverlay.hidden) hideMessageMenu();
