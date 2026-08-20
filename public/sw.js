@@ -1,5 +1,5 @@
-/* global self, caches, fetch */
-const CACHE = "raum-shell-v1";
+/* global self, caches, fetch, clients */
+const CACHE = "raum-shell-v3";
 const PRECACHE = [
   "/",
   "/index.html",
@@ -76,3 +76,53 @@ self.addEventListener("fetch", (event) => {
     })
   );
 });
+
+self.addEventListener("push", (event) => {
+  event.waitUntil(handlePush(event));
+});
+
+async function handlePush(event) {
+  let data = {};
+  try {
+    data = event.data ? event.data.json() : {};
+  } catch {
+    data = { body: event.data ? event.data.text() : "" };
+  }
+
+  const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+  if (windows.some((client) => client.focused)) {
+    return;
+  }
+
+  const conversationId = Object.prototype.hasOwnProperty.call(data, "conversationId")
+    ? data.conversationId
+    : null;
+
+  await self.registration.showNotification(data.title || "Raum", {
+    body: data.body || "Neue Nachricht",
+    icon: data.icon || "/icons/icon-192.png",
+    badge: data.badge || "/icons/icon-192.png",
+    tag: data.tag || "raum",
+    renotify: true,
+    data: { conversationId },
+  });
+}
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const conversationId = event.notification.data?.conversationId ?? null;
+  event.waitUntil(openChat(conversationId));
+});
+
+async function openChat(conversationId) {
+  const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+  for (const client of windows) {
+    if (client.url.startsWith(self.location.origin)) {
+      client.postMessage({ type: "open-conversation", conversationId });
+      if ("focus" in client) await client.focus();
+      return;
+    }
+  }
+  const path = conversationId == null ? "/?c=global" : `/?c=${encodeURIComponent(conversationId)}`;
+  await self.clients.openWindow(path);
+}

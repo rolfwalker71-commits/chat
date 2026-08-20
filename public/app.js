@@ -131,6 +131,7 @@
   const inputFile = document.getElementById("input-file");
   const btnSummarize = document.getElementById("btn-summarize");
   const btnNotify = document.getElementById("btn-notify");
+  const btnNotifyMore = document.getElementById("btn-notify-more");
   const groupTools = document.getElementById("group-tools");
   const groupTitle = document.getElementById("group-title");
   const btnGroupTitle = document.getElementById("btn-group-title");
@@ -183,6 +184,7 @@
   let voiceTranscript = "";
   const onlineIds = new Set();
   let notifyPermission = typeof Notification !== "undefined" ? Notification.permission : "denied";
+  let pushSubscribed = false;
   /** @type {Array} */
   let adminUsers = [];
   /** @type {"pending" | "all"} */
@@ -354,6 +356,7 @@
     hideReactionPicker();
     hideMessageMenu();
     setAttachTray(false);
+    if (socket) socket.emit("conversation:idle");
     updatePanes();
     renderConversationLists();
     if (!fromPop && !isWideLayout() && history.state?.view === "thread") {
@@ -474,6 +477,9 @@
       showChat();
       await loadConversations();
       connectSocket();
+      enablePush({ request: true }).catch(() => {});
+      const deepLink = conversationFromUrl();
+      if (deepLink !== undefined) await openConversation(deepLink);
     } catch {
       currentUser = null;
       showAuth();
@@ -522,6 +528,7 @@
       formAuth.reset();
       await loadConversations();
       connectSocket();
+      enablePush({ request: true }).catch(() => {});
       if (authMode === "admin") showAdmin();
       else showChat();
     } catch (err) {
@@ -535,6 +542,7 @@
 
   async function handleLogout() {
     stopRecording(false);
+    await disablePush();
     try {
       await api("/api/logout", { method: "POST" });
     } catch {
@@ -562,6 +570,8 @@
     setSearchPanel(false);
     setChatMenu(false);
     setForwardPanel(false);
+    pushSubscribed = false;
+    refreshNotifyButtons();
     adminUsers = [];
     adminFilter = "pending";
     setAdminFilter("pending");
@@ -768,17 +778,73 @@
     return "";
   }
 
+  function sendButtonIcon(editing) {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("aria-hidden", "true");
+    if (editing) {
+      svg.setAttribute("class", "h-6 w-6");
+      svg.setAttribute("viewBox", "0 0 24 24");
+      svg.setAttribute("fill", "none");
+      svg.setAttribute("stroke", "currentColor");
+      svg.setAttribute("stroke-width", "2.5");
+      svg.setAttribute("stroke-linecap", "round");
+      svg.setAttribute("stroke-linejoin", "round");
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("d", "M20 6 9 17l-5-5");
+      svg.append(path);
+      return svg;
+    }
+    svg.setAttribute("class", "h-7 w-7");
+    svg.setAttribute("viewBox", "90 50 360 380");
+    const mask = document.createElementNS("http://www.w3.org/2000/svg", "mask");
+    mask.setAttribute("id", "send-logo-dots");
+    const maskBg = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    maskBg.setAttribute("width", "512");
+    maskBg.setAttribute("height", "512");
+    maskBg.setAttribute("fill", "white");
+    mask.append(maskBg);
+    for (const cx of [300, 348, 396]) {
+      const hole = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      hole.setAttribute("cx", String(cx));
+      hole.setAttribute("cy", "268");
+      hole.setAttribute("r", "20");
+      hole.setAttribute("fill", "black");
+      mask.append(hole);
+    }
+    const back = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    back.setAttribute("fill", "currentColor");
+    back.setAttribute("opacity", "0.4");
+    back.setAttribute(
+      "d",
+      "M118 148c0-48.6 39.4-88 88-88h86c48.6 0 88 39.4 88 88v46c0 48.6-39.4 88-88 88h-18l-54 46 12-46h-26c-48.6 0-88-39.4-88-88v-46Z"
+    );
+    const front = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    front.setAttribute("fill", "currentColor");
+    front.setAttribute("mask", "url(#send-logo-dots)");
+    front.setAttribute(
+      "d",
+      "M168 214c0-52.9 42.9-96 96-96h92c52.9 0 96 43.1 96 96v58c0 52.9-43.1 96-96 96h-22l-62 52 14-52h-22c-53.1 0-96-43.1-96-96v-58Z"
+    );
+    svg.append(mask, back, front);
+    return svg;
+  }
+
+  function setSendMode(editing) {
+    btnSend.setAttribute("aria-label", editing ? "Speichern" : "Senden");
+    btnSend.replaceChildren(sendButtonIcon(editing));
+  }
+
   function startEdit(message) {
     if (!message?.id) return;
     editingId = message.id;
     messageInput.value = message.content || "";
-    btnSend.textContent = "Speichern";
+    setSendMode(true);
     messageInput.focus();
   }
 
   function clearEdit() {
     editingId = null;
-    btnSend.textContent = "Senden";
+    setSendMode(false);
   }
 
   function setForwardPanel(open) {
@@ -860,14 +926,145 @@
     }
   }
 
+  function urlBase64ToUint8Array(base64String) {
+    const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+    const raw = atob((base64String + padding).replace(/-/g, "+").replace(/_/g, "/"));
+    const output = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i += 1) output[i] = raw.charCodeAt(i);
+    return output;
+  }
+
+  function pushSupported() {
+    return (
+      typeof Notification !== "undefined" &&
+      "serviceWorker" in navigator &&
+      "PushManager" in window
+    );
+  }
+
+  function notifyButtonLabel() {
+    if (!pushSupported()) return "Benachrichtigungen nicht verfügbar";
+    if (notifyPermission === "denied") return "Benachrichtigungen blockiert";
+    if (notifyPermission === "granted" && pushSubscribed) return "Benachrichtigungen an";
+    return "Benachrichtigungen erlauben";
+  }
+
+  function refreshNotifyButtons() {
+    const label = notifyButtonLabel();
+    if (btnNotify) btnNotify.textContent = label;
+    if (btnNotifyMore) btnNotifyMore.textContent = label;
+  }
+
+  async function getPushRegistration() {
+    if (!("serviceWorker" in navigator)) return null;
+    const existing = await navigator.serviceWorker.getRegistration();
+    if (existing) return existing;
+    return navigator.serviceWorker.register("/sw.js");
+  }
+
+  async function enablePush({ request = false } = {}) {
+    if (!currentUser || !pushSupported()) {
+      refreshNotifyButtons();
+      return false;
+    }
+    notifyPermission = Notification.permission;
+    if (notifyPermission === "default" && request) {
+      notifyPermission = await Notification.requestPermission();
+    }
+    if (notifyPermission !== "granted") {
+      pushSubscribed = false;
+      refreshNotifyButtons();
+      return false;
+    }
+
+    const registration = await getPushRegistration();
+    if (!registration) return false;
+    await navigator.serviceWorker.ready;
+
+    let subscription = await registration.pushManager.getSubscription();
+    if (!subscription) {
+      const { publicKey } = await api("/api/push/key");
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(publicKey),
+      });
+    }
+    await api("/api/push/subscribe", {
+      method: "POST",
+      body: JSON.stringify(subscription),
+    });
+    pushSubscribed = true;
+    refreshNotifyButtons();
+    return true;
+  }
+
+  async function disablePush() {
+    if (!pushSupported()) return;
+    const registration = await navigator.serviceWorker.getRegistration();
+    const subscription = registration ? await registration.pushManager.getSubscription() : null;
+    if (subscription) {
+      try {
+        await api("/api/push/unsubscribe", {
+          method: "POST",
+          body: JSON.stringify({ endpoint: subscription.endpoint }),
+        });
+      } catch {
+        // Abmelden soll lokal klappen, auch wenn der Server schon leer ist.
+      }
+      await subscription.unsubscribe();
+    }
+    pushSubscribed = false;
+    refreshNotifyButtons();
+  }
+
+  async function togglePush() {
+    if (!pushSupported()) {
+      showError(chatError, "Dieser Browser unterstützt keine Push-Benachrichtigungen.");
+      return;
+    }
+    if (notifyPermission === "denied") {
+      showError(
+        chatError,
+        "Benachrichtigungen sind blockiert. In den Browser- oder Systemeinstellungen erlauben."
+      );
+      return;
+    }
+    if (pushSubscribed) {
+      await disablePush();
+      return;
+    }
+    try {
+      const ok = await enablePush({ request: true });
+      if (!ok && notifyPermission === "denied") {
+        showError(
+          chatError,
+          "Benachrichtigungen sind blockiert. In den Browser- oder Systemeinstellungen erlauben."
+        );
+      }
+    } catch (err) {
+      showError(chatError, err.message || "Benachrichtigungen konnten nicht aktiviert werden.");
+    }
+  }
+
+  function conversationFromUrl() {
+    const params = new URLSearchParams(window.location.search);
+    const raw = params.get("c");
+    if (raw == null || raw === "") return undefined;
+    if (raw === "global") return null;
+    const id = Number(raw);
+    return Number.isInteger(id) && id > 0 ? id : undefined;
+  }
+
   function notifyIncoming(message) {
     if (notifyPermission !== "granted") return;
     if (!message || (currentUser && message.userId === currentUser.id)) return;
     if (!document.hidden && sameRoom(message.conversationId ?? null)) return;
+    if (document.hidden && pushSubscribed) return;
     try {
       const n = new Notification(displayName(message) || "Neue Nachricht", {
         body: previewText(message).slice(0, 80),
         tag: `chat-${message.conversationId || "global"}`,
+        icon: "/icons/icon-192.png",
       });
       n.addEventListener("click", () => {
         window.focus();
@@ -1755,6 +1952,7 @@
 
   function setMorePanel(open) {
     setOverlay(moreOverlay, open);
+    if (open) refreshNotifyButtons();
   }
 
   function setOnlinePanel(_open) {
@@ -2310,10 +2508,7 @@
         ? "Sprachmodell ist aktiv. Kurzfassung und Vorschläge können vom Modell kommen."
         : "Kurzfassung und Antwortvorschläge laufen lokal. Mit AI_ENABLED und AI_API_KEY in der .env übernimmt ein Modell.";
     }
-    if (btnNotify) {
-      btnNotify.textContent =
-        notifyPermission === "granted" ? "Benachrichtigungen an" : "Benachrichtigungen erlauben";
-    }
+    refreshNotifyButtons();
   }
 
   function markCurrentUnread() {
@@ -2444,15 +2639,8 @@
       btnSummarize.disabled = false;
     }
   });
-  btnNotify.addEventListener("click", async () => {
-    if (typeof Notification === "undefined") {
-      showError(chatError, "Dieser Browser unterstützt keine Benachrichtigungen.");
-      return;
-    }
-    const perm = await Notification.requestPermission();
-    notifyPermission = perm;
-    btnNotify.textContent = perm === "granted" ? "Benachrichtigungen an" : "Benachrichtigungen erlauben";
-  });
+  btnNotify.addEventListener("click", togglePush);
+  if (btnNotifyMore) btnNotifyMore.addEventListener("click", togglePush);
   btnGroupTitle.addEventListener("click", async () => {
     try {
       const conv = await api(`/api/conversations/${activeConversationId}`, {
@@ -2541,6 +2729,16 @@
   });
 
   window.addEventListener("resize", updatePanes);
+  document.addEventListener("visibilitychange", () => {
+    if (!socket) return;
+    if (document.hidden) {
+      socket.emit("conversation:idle");
+      return;
+    }
+    if (chatSelected) {
+      socket.emit("conversation:focus");
+    }
+  });
   window.addEventListener("popstate", () => {
     if (chatSelected && !isWideLayout()) closeThread(true);
   });
@@ -2555,14 +2753,16 @@
   }
 
   if ("serviceWorker" in navigator) {
-    window.addEventListener("load", () => {
-      navigator.serviceWorker.register("/sw.js").catch(() => {
-        // PWA-Hülle ist optional, Chat läuft ohne Service Worker.
-      });
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+    navigator.serviceWorker.addEventListener("message", (event) => {
+      if (event.data?.type === "open-conversation" && currentUser) {
+        openConversation(event.data.conversationId ?? null);
+      }
     });
   }
 
   syncAppHeight();
+  setSendMode(false);
   setListTab("chats");
   setAuthMode("login");
   restoreSession();

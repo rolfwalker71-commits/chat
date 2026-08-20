@@ -23,7 +23,7 @@
  *   - Tipp-Anzeige, Reactions, Antworten, Soft-Delete, Ungelesen, Suche
  *   - Last-seen, Lesebestätigungen (DMs), Bearbeiten, Dateianhänge
  *   - Gruppen: Titel, Mitglieder einladen, verlassen
- *   - Browser-Benachrichtigungen (Frontend, Notification API)
+ *   - Web-Push (VAPID-Schlüssel werden beim Start erzeugt und in PostgreSQL gehalten)
  *
  * KI:
  *   - Assistent „raum“ (regelbasiert, optional LLM)
@@ -59,6 +59,7 @@ const jwt = require("jsonwebtoken");
 const { Pool } = require("pg");
 const { Server } = require("socket.io");
 const xss = require("xss");
+const webpush = require("web-push");
 
 // ---------------------------------------------------------------------------
 // Konfiguration aus der Umgebung (siehe .env.example)
@@ -122,6 +123,10 @@ const MIME_EXTENSION = {
 };
 const MODERATION_RE =
   /\b(nazi|hitler|kike|nigger|nigga|faggot|child\s*porn|kinderporn)/i;
+const VAPID_SUBJECT = "mailto:raum@localhost";
+
+/** @type {{ publicKey: string, privateKey: string } | null} */
+let vapidKeys = null;
 
 if (!JWT_SECRET || JWT_SECRET.length < 16) {
   console.error("JWT_SECRET fehlt oder ist zu kurz. Bitte .env prüfen.");
@@ -1144,7 +1149,159 @@ async function initDatabase() {
       ON message_reactions (message_id);
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key        TEXT PRIMARY KEY,
+      value      TEXT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS push_subscriptions (
+      endpoint    TEXT PRIMARY KEY,
+      user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      p256dh      TEXT NOT NULL,
+      auth        TEXT NOT NULL,
+      user_agent  TEXT,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user
+      ON push_subscriptions (user_id);
+  `);
+
   log("Datenbankschema ist bereit.");
+}
+
+async function settingGet(key) {
+  const { rows } = await pool.query(`SELECT value FROM app_settings WHERE key = $1`, [key]);
+  return rows[0]?.value || null;
+}
+
+async function settingSet(key, value) {
+  await pool.query(
+    `
+    INSERT INTO app_settings (key, value, updated_at)
+    VALUES ($1, $2, NOW())
+    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+    `,
+    [key, value]
+  );
+}
+
+async function ensureVapidKeys() {
+  let publicKey = await settingGet("vapid_public");
+  let privateKey = await settingGet("vapid_private");
+
+  if (!publicKey || !privateKey) {
+    const generated = webpush.generateVAPIDKeys();
+    publicKey = generated.publicKey;
+    privateKey = generated.privateKey;
+    await settingSet("vapid_public", publicKey);
+    await settingSet("vapid_private", privateKey);
+    log("VAPID-Schlüssel erzeugt und in der Datenbank gespeichert.");
+  }
+
+  vapidKeys = { publicKey, privateKey };
+  webpush.setVapidDetails(VAPID_SUBJECT, publicKey, privateKey);
+}
+
+function isUserViewing(userId, conversationId) {
+  return socketsForUser(userId).some((sock) => {
+    if (!sock.viewingChat) return false;
+    if (conversationId == null) return sock.activeConversationId == null;
+    return Number(sock.activeConversationId) === Number(conversationId);
+  });
+}
+
+function pushPreview(message) {
+  if (!message) return "Neue Nachricht";
+  if (message.deleted) return "Nachricht gelöscht";
+  const type = message.type || "text";
+  if (type === "image") return "Bild";
+  if (type === "voice") return "Sprachnachricht";
+  if (type === "location") return "Standort";
+  if (type === "file") return message.file?.name || "Datei";
+  return String(message.content || "Neue Nachricht").slice(0, 140);
+}
+
+async function deletePushEndpoint(endpoint) {
+  if (!endpoint) return;
+  await pool.query(`DELETE FROM push_subscriptions WHERE endpoint = $1`, [endpoint]);
+}
+
+async function sendPushToUser(userId, payload) {
+  if (!vapidKeys || !userId) return;
+  const { rows } = await pool.query(
+    `SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = $1`,
+    [userId]
+  );
+  if (!rows.length) return;
+
+  const body = JSON.stringify(payload);
+  await Promise.all(
+    rows.map(async (row) => {
+      try {
+        await webpush.sendNotification(
+          {
+            endpoint: row.endpoint,
+            keys: { p256dh: row.p256dh, auth: row.auth },
+          },
+          body,
+          { TTL: 60 * 60, urgency: "high" }
+        );
+      } catch (err) {
+        const status = err?.statusCode;
+        if (status === 404 || status === 410) {
+          await deletePushEndpoint(row.endpoint);
+          return;
+        }
+        console.error("Web-Push fehlgeschlagen:", status || err.message);
+      }
+    })
+  );
+}
+
+async function notifyPushForMessage(message, conversationId, senderId) {
+  if (!vapidKeys || !message) return;
+  const payload = {
+    title: displayName(message) || "Raum",
+    body: pushPreview(message),
+    tag: `chat-${conversationId || "global"}`,
+    conversationId: conversationId ?? null,
+    icon: "/icons/icon-192.png",
+    badge: "/icons/icon-192.png",
+  };
+
+  let userIds = [];
+  if (conversationId) {
+    const { rows } = await pool.query(
+      `
+      SELECT DISTINCT ps.user_id
+      FROM push_subscriptions ps
+      JOIN conversation_members cm ON cm.user_id = ps.user_id
+      WHERE cm.conversation_id = $1 AND ps.user_id <> $2
+      `,
+      [conversationId, senderId]
+    );
+    userIds = rows.map((row) => row.user_id);
+  } else {
+    const { rows } = await pool.query(
+      `SELECT DISTINCT user_id FROM push_subscriptions WHERE user_id <> $1`,
+      [senderId]
+    );
+    userIds = rows.map((row) => row.user_id);
+  }
+
+  for (const userId of userIds) {
+    if (isUserViewing(userId, conversationId)) continue;
+    sendPushToUser(userId, payload).catch((err) => {
+      console.error("Push an Nutzer fehlgeschlagen:", err.message);
+    });
+  }
 }
 
 /** Wartet, bis PostgreSQL Anfragen annimmt (Compose-Healthcheck + extra Puffer). */
@@ -1284,6 +1441,60 @@ app.get("/api/me", requireAuth, async (req, res) => {
   } catch (err) {
     console.error("Profil laden fehlgeschlagen:", err);
     return sendError(res, 500, "Profil konnte nicht geladen werden.");
+  }
+});
+
+app.get("/api/push/key", requireAuth, (_req, res) => {
+  if (!vapidKeys?.publicKey) {
+    return sendError(res, 503, "Push ist noch nicht bereit.");
+  }
+  return res.json({ publicKey: vapidKeys.publicKey });
+});
+
+app.post("/api/push/subscribe", requireAuth, async (req, res) => {
+  try {
+    const endpoint = String(req.body?.endpoint || "").trim();
+    const p256dh = String(req.body?.keys?.p256dh || "").trim();
+    const auth = String(req.body?.keys?.auth || "").trim();
+    if (!endpoint.startsWith("https://") || !p256dh || !auth) {
+      return sendError(res, 400, "Ungültiges Push-Abonnement.");
+    }
+    if (endpoint.length > 2000 || p256dh.length > 200 || auth.length > 200) {
+      return sendError(res, 400, "Push-Abonnement ist zu groß.");
+    }
+    const userAgent = String(req.get("user-agent") || "").slice(0, 240);
+    await pool.query(
+      `
+      INSERT INTO push_subscriptions (endpoint, user_id, p256dh, auth, user_agent, last_seen_at)
+      VALUES ($1, $2, $3, $4, $5, NOW())
+      ON CONFLICT (endpoint) DO UPDATE
+        SET user_id = EXCLUDED.user_id,
+            p256dh = EXCLUDED.p256dh,
+            auth = EXCLUDED.auth,
+            user_agent = EXCLUDED.user_agent,
+            last_seen_at = NOW()
+      `,
+      [endpoint, req.user.id, p256dh, auth, userAgent || null]
+    );
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("Push-Abo speichern fehlgeschlagen:", err);
+    return sendError(res, 500, "Push-Abo konnte nicht gespeichert werden.");
+  }
+});
+
+app.post("/api/push/unsubscribe", requireAuth, async (req, res) => {
+  try {
+    const endpoint = String(req.body?.endpoint || "").trim();
+    if (!endpoint) return sendError(res, 400, "Endpoint fehlt.");
+    await pool.query(`DELETE FROM push_subscriptions WHERE endpoint = $1 AND user_id = $2`, [
+      endpoint,
+      req.user.id,
+    ]);
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("Push-Abo löschen fehlgeschlagen:", err);
+    return sendError(res, 500, "Push-Abo konnte nicht entfernt werden.");
   }
 });
 
@@ -2319,27 +2530,29 @@ async function insertAndBroadcastMessage({
     const members = await loadConversationMembers(conversationId);
     for (const member of members) {
       if (member.id === user.id) continue;
-      const viewing = socketsForUser(member.id).some(
-        (sock) => sock.activeConversationId === conversationId
-      );
-      if (viewing) {
+      if (isUserViewing(member.id, conversationId)) {
         await markRead(member.id, conversationId, message.id);
-        await notifyInbox(member.id, conversationId);
-      } else {
-        await notifyInbox(member.id, conversationId);
       }
+      await notifyInbox(member.id, conversationId);
     }
     await markRead(user.id, conversationId, message.id);
   } else {
+    const seen = new Set();
     for (const sock of io.sockets.sockets.values()) {
       if (!sock.user || sock.user.id === user.id) continue;
-      if (sock.activeConversationId == null) {
+      if (seen.has(sock.user.id)) continue;
+      seen.add(sock.user.id);
+      if (isUserViewing(sock.user.id, null)) {
         await markRead(sock.user.id, null, message.id);
       }
       await notifyInbox(sock.user.id, null);
     }
     await markRead(user.id, null, message.id);
   }
+
+  notifyPushForMessage(message, conversationId, user.id).catch((err) => {
+    console.error("Push-Versand fehlgeschlagen:", err.message);
+  });
 
   if (!user.isBot) {
     maybeReplyAsBot(message, conversationId, user).catch((err) =>
@@ -2409,6 +2622,7 @@ io.on("connection", async (socket) => {
 
   socket.user = profile;
   socket.activeConversationId = null;
+  socket.viewingChat = false;
   connections.set(socket.id, {
     userId: profile.id,
     username: profile.username,
@@ -2464,6 +2678,7 @@ io.on("connection", async (socket) => {
       }
 
       socket.activeConversationId = conversationId;
+      socket.viewingChat = true;
       const messages = await fetchMessages(conversationId, HISTORY_LIMIT, userId);
       const lastId = messages.length ? messages[messages.length - 1].id : null;
       const unreadCount = await markRead(userId, conversationId, lastId);
@@ -2474,6 +2689,14 @@ io.on("connection", async (socket) => {
       console.error("Unterhaltung öffnen fehlgeschlagen:", err);
       respond({ ok: false, error: "Verlauf konnte nicht geladen werden." });
     }
+  });
+
+  socket.on("conversation:idle", () => {
+    socket.viewingChat = false;
+  });
+
+  socket.on("conversation:focus", () => {
+    if (socket.activeConversationId !== undefined) socket.viewingChat = true;
   });
 
   socket.on("message:send", async (payload, ack) => {
@@ -2916,11 +3139,13 @@ async function start() {
   await waitForDatabase();
   await fs.mkdir(UPLOAD_DIR, { recursive: true });
   await initDatabase();
+  await ensureVapidKeys();
   await ensureAssistantBot();
   await ensureAdminUser();
 
   server.listen(PORT, "0.0.0.0", () => {
     log(`Chat-Server lauscht auf Port ${PORT} (${NODE_ENV})`);
+    if (vapidKeys) log("Web-Push ist aktiv (VAPID-Schlüssel aus der Datenbank).");
   });
 }
 
