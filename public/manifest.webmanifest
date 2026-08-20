@@ -1,8 +1,8 @@
 {
   "id": "/",
-  "name": "Raum",
-  "short_name": "Raum",
-  "description": "Gemeinsamer Echtzeit-Chat mit privaten Nachrichten",
+  "name": "MyChat",
+  "short_name": "MyChat",
+  "description": "Echtzeit-Nachrichten mit privaten Chats",
   "lang": "de",
   "dir": "ltr",
   "start_url": "/",
@@ -10,8 +10,8 @@
   "display": "standalone",
   "display_override": ["standalone", "minimal-ui", "browser"],
   "orientation": "portrait-primary",
-  "background_color": "#09090b",
-  "theme_color": "#09090b",
+  "background_color": "#fffbf5",
+  "theme_color": "#fffbf5",
   "categories": ["social", "communication"],
   "icons": [
     {

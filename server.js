@@ -22,7 +22,7 @@
  * Interaktion (Echtzeit):
  *   - Tipp-Anzeige, Reactions, Antworten, Soft-Delete, Ungelesen, Suche
  *   - Last-seen, Lesebestätigungen (DMs), Bearbeiten, Dateianhänge
- *   - Gruppen: Titel, Mitglieder einladen, verlassen
+ *   - Gruppen: Leitung, Avatar, Titel, Mitglieder einladen/entfernen, verlassen
  *   - Web-Push (VAPID-Schlüssel werden beim Start erzeugt und in PostgreSQL gehalten)
  *
  * KI:
@@ -618,6 +618,58 @@ async function loadConversationMembers(conversationId) {
   return rows.map(toPublicUser);
 }
 
+async function groupAdminUserId(conversationId) {
+  const { rows } = await pool.query(
+    `SELECT type, admin_user_id FROM conversations WHERE id = $1`,
+    [conversationId]
+  );
+  if (!rows[0] || rows[0].type !== "group") return null;
+  let adminId = rows[0].admin_user_id;
+  if (adminId && (await isConversationMember(adminId, conversationId))) return adminId;
+  const { rows: next } = await pool.query(
+    `
+    SELECT user_id FROM conversation_members
+    WHERE conversation_id = $1
+    ORDER BY joined_at ASC, user_id ASC
+    LIMIT 1
+    `,
+    [conversationId]
+  );
+  adminId = next[0]?.user_id || null;
+  await pool.query(`UPDATE conversations SET admin_user_id = $1 WHERE id = $2`, [adminId, conversationId]);
+  return adminId;
+}
+
+async function requireGroupAdmin(userId, conversationId) {
+  const { rows } = await pool.query(`SELECT type FROM conversations WHERE id = $1`, [conversationId]);
+  if (!rows[0] || rows[0].type !== "group") {
+    const error = new Error("Nur in Gruppen möglich.");
+    error.status = 400;
+    throw error;
+  }
+  const adminId = await groupAdminUserId(conversationId);
+  if (adminId !== userId) {
+    const error = new Error("Nur die Gruppenleitung kann das ändern.");
+    error.status = 403;
+    throw error;
+  }
+}
+
+async function promoteOldestMember(conversationId, exceptUserId) {
+  const { rows } = await pool.query(
+    `
+    SELECT user_id FROM conversation_members
+    WHERE conversation_id = $1 AND user_id <> $2
+    ORDER BY joined_at ASC, user_id ASC
+    LIMIT 1
+    `,
+    [conversationId, exceptUserId]
+  );
+  const adminId = rows[0]?.user_id || null;
+  await pool.query(`UPDATE conversations SET admin_user_id = $1 WHERE id = $2`, [adminId, conversationId]);
+  return adminId;
+}
+
 function applyBlockFlags(conv, userId, blockRows) {
   if (!conv || conv.type !== "dm" || !conv.peer) return conv;
   conv.blockedByMe = blockRows.some(
@@ -654,17 +706,25 @@ async function assertDmSendable(userId, conversationId) {
 }
 
 function serializeConversation(row, members, currentUserId) {
+  const adminUserId = row.type === "group" ? row.admin_user_id || null : null;
+  const taggedMembers =
+    row.type === "group"
+      ? members.map((member) => ({ ...member, isAdmin: member.id === adminUserId }))
+      : members;
   const conv = {
     id: row.id,
     type: row.type,
     title: row.title || "",
+    avatarUrl: row.avatar_url || "",
+    adminUserId,
+    isAdmin: Boolean(adminUserId && adminUserId === currentUserId),
     createdAt: row.created_at.toISOString(),
     unreadCount: Number(row.unread_count) || 0,
     peerLastReadMessageId: row.type === "dm" ? row.peer_last_read_message_id || null : null,
     peerLastDeliveredMessageId: row.type === "dm" ? row.peer_last_delivered_message_id || null : null,
     pinned: Boolean(row.pinned_at),
     muted: Boolean(row.muted_at),
-    members,
+    members: taggedMembers,
     lastMessage: row.last_content || row.last_id
       ? {
           id: row.last_id || null,
@@ -677,7 +737,7 @@ function serializeConversation(row, members, currentUserId) {
       : null,
     peer:
       row.type === "dm"
-        ? members.find((m) => m.id !== currentUserId) || members[0] || null
+        ? taggedMembers.find((m) => m.id !== currentUserId) || taggedMembers[0] || null
         : null,
     blockedByMe: false,
     blockedMe: false,
@@ -689,7 +749,7 @@ async function fetchConversationsForUser(userId) {
   const { rows } = await pool.query(
     `
     SELECT
-      c.id, c.type, c.title, c.created_at,
+      c.id, c.type, c.title, c.avatar_url, c.admin_user_id, c.created_at,
       me.pinned_at, me.hidden_at, me.muted_at,
       last.id AS last_id,
       last.user_id AS last_user_id,
@@ -768,7 +828,7 @@ async function getConversationPayload(conversationId, userId) {
   const { rows } = await pool.query(
     `
     SELECT
-      c.id, c.type, c.title, c.created_at,
+      c.id, c.type, c.title, c.avatar_url, c.admin_user_id, c.created_at,
       me.pinned_at, me.hidden_at, me.muted_at,
       last.id AS last_id,
       last.user_id AS last_user_id,
@@ -990,7 +1050,7 @@ async function fetchLinkPreview(rawUrl) {
       redirect: "manual",
       signal: ac.signal,
       headers: {
-        "User-Agent": "RaumChat/1.0 (+link-preview)",
+        "User-Agent": "MyChat/1.0 (+link-preview)",
         Accept: "text/html,application/xhtml+xml",
       },
     });
@@ -1426,6 +1486,10 @@ async function initDatabase() {
   `);
   await pool.query(`ALTER TABLE conversations ADD COLUMN IF NOT EXISTS summary TEXT`);
   await pool.query(`ALTER TABLE conversations ADD COLUMN IF NOT EXISTS summary_updated_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE conversations ADD COLUMN IF NOT EXISTS avatar_url TEXT`);
+  await pool.query(
+    `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS admin_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL`
+  );
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS conversation_members (
@@ -1453,6 +1517,18 @@ async function initDatabase() {
   await pool.query(`ALTER TABLE conversation_members ADD COLUMN IF NOT EXISTS hidden_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE conversation_members ADD COLUMN IF NOT EXISTS muted_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS global_muted_at TIMESTAMPTZ`);
+  await pool.query(`
+    UPDATE conversations c
+    SET admin_user_id = sub.user_id
+    FROM (
+      SELECT DISTINCT ON (conversation_id) conversation_id, user_id
+      FROM conversation_members
+      ORDER BY conversation_id, joined_at ASC, user_id ASC
+    ) sub
+    WHERE c.id = sub.conversation_id
+      AND c.type = 'group'
+      AND c.admin_user_id IS NULL
+  `);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS uploads (
@@ -1700,9 +1776,9 @@ async function sendPushToUser(userId, payload) {
 }
 
 async function notifyPushForMessage(message, conversationId, senderId) {
-  if (!vapidKeys || !message) return;
+  if (!vapidKeys || !message || !conversationId) return;
   const payload = {
-    title: displayName(message) || "Raum",
+    title: displayName(message) || "MyChat",
     body: pushPreview(message),
     tag: `chat-${conversationId || "global"}`,
     conversationId: conversationId ?? null,
@@ -2214,6 +2290,7 @@ app.get("/api/users", requireAuth, async (req, res) => {
       SELECT id, username, real_name, avatar_url, is_bot, is_admin, is_approved, last_seen_at
       FROM users
       WHERE ${where}
+        AND is_bot = FALSE
         AND NOT EXISTS (
           SELECT 1 FROM user_blocks b
           WHERE (b.blocker_id = $1 AND b.blocked_id = users.id)
@@ -2270,6 +2347,8 @@ app.post("/api/conversations", requireAuth, async (req, res) => {
 
     const memberIds = [req.user.id, ...userRows.map((u) => u.id)];
     const type = memberIds.length === 2 ? "dm" : "group";
+    const title =
+      type === "group" ? sanitizeText(String(req.body?.title || "")).slice(0, 80) : "";
 
     if (type === "dm" && (await areUsersBlocked(req.user.id, userRows[0].id))) {
       return sendError(res, 403, "Diese Person ist blockiert.");
@@ -2292,8 +2371,10 @@ app.post("/api/conversations", requireAuth, async (req, res) => {
     try {
       await client.query("BEGIN");
       const inserted = await client.query(
-        `INSERT INTO conversations (type) VALUES ($1) RETURNING id, type, title, created_at`,
-        [type]
+        `INSERT INTO conversations (type, title, admin_user_id)
+         VALUES ($1, $2, $3)
+         RETURNING id, type, title, created_at`,
+        [type, title || null, type === "group" ? req.user.id : null]
       );
       conversationId = inserted.rows[0].id;
       for (const memberId of memberIds) {
@@ -2343,18 +2424,48 @@ app.patch("/api/conversations/:id", requireAuth, requireApproved, async (req, re
     if (!(await isConversationMember(req.user.id, conversationId))) {
       return sendError(res, 403, "Kein Zugriff auf diese Unterhaltung.");
     }
-    const { rows } = await pool.query(`SELECT type FROM conversations WHERE id = $1`, [conversationId]);
-    if (!rows[0] || rows[0].type !== "group") {
-      return sendError(res, 400, "Nur Gruppen haben einen Titel.");
+    await requireGroupAdmin(req.user.id, conversationId);
+
+    const body = req.body || {};
+    const updates = [];
+    const values = [];
+    let i = 1;
+
+    if (Object.prototype.hasOwnProperty.call(body, "title")) {
+      const title = sanitizeText(String(body.title || "")).slice(0, 80);
+      updates.push(`title = $${i++}`);
+      values.push(title || null);
     }
-    const title = sanitizeText(String(req.body?.title || "")).slice(0, 80);
-    await pool.query(`UPDATE conversations SET title = $1 WHERE id = $2`, [title || null, conversationId]);
+    if (Object.prototype.hasOwnProperty.call(body, "adminUserId")) {
+      const adminUserId = parsePositiveInt(body.adminUserId);
+      if (!adminUserId) return sendError(res, 400, "Ungültige Person.");
+      if (adminUserId === req.user.id) {
+        return sendError(res, 400, "Du bist bereits die Gruppenleitung.");
+      }
+      if (!(await isConversationMember(adminUserId, conversationId))) {
+        return sendError(res, 400, "Die neue Leitung muss in der Gruppe sein.");
+      }
+      updates.push(`admin_user_id = $${i++}`);
+      values.push(adminUserId);
+    }
+    if (Object.prototype.hasOwnProperty.call(body, "avatarUrl")) {
+      const avatarUrl = sanitizeText(String(body.avatarUrl || "")).slice(0, MAX_AVATAR_URL_LENGTH);
+      if (avatarUrl && !isValidAvatarUrl(avatarUrl)) {
+        return sendError(res, 400, "Ungültige Avatar-URL.");
+      }
+      updates.push(`avatar_url = $${i++}`);
+      values.push(avatarUrl || null);
+    }
+    if (!updates.length) return sendError(res, 400, "Keine Änderung.");
+
+    values.push(conversationId);
+    await pool.query(`UPDATE conversations SET ${updates.join(", ")} WHERE id = $${i}`, values);
     const payload = await getConversationPayload(conversationId, req.user.id);
     io.to(conversationRoom(conversationId)).emit("conversation:updated", payload);
     return res.json(payload);
   } catch (err) {
-    console.error("Gruppentitel fehlgeschlagen:", err);
-    return sendError(res, 500, "Titel konnte nicht gespeichert werden.");
+    console.error("Gruppe ändern fehlgeschlagen:", err);
+    return sendError(res, err.status || 500, err.message || "Gruppe konnte nicht gespeichert werden.");
   }
 });
 
@@ -2365,6 +2476,7 @@ app.post("/api/conversations/:id/members", requireAuth, requireApproved, async (
     if (!(await isConversationMember(req.user.id, conversationId))) {
       return sendError(res, 403, "Kein Zugriff auf diese Unterhaltung.");
     }
+    await requireGroupAdmin(req.user.id, conversationId);
     const { rows: convRows } = await pool.query(`SELECT type FROM conversations WHERE id = $1`, [conversationId]);
     if (!convRows[0] || convRows[0].type !== "group") {
       return sendError(res, 400, "Mitglieder nur in Gruppen einladen.");
@@ -2397,7 +2509,7 @@ app.post("/api/conversations/:id/members", requireAuth, requireApproved, async (
     return res.json(payload);
   } catch (err) {
     console.error("Mitglied einladen fehlgeschlagen:", err);
-    return sendError(res, 500, "Person konnte nicht eingeladen werden.");
+    return sendError(res, err.status || 500, err.message || "Person konnte nicht eingeladen werden.");
   }
 });
 
@@ -2411,6 +2523,13 @@ app.delete("/api/conversations/:id/members/me", requireAuth, async (req, res) =>
     }
     if (!(await isConversationMember(req.user.id, conversationId))) {
       return sendError(res, 403, "Kein Zugriff auf diese Unterhaltung.");
+    }
+    const { rows: adminRows } = await pool.query(
+      `SELECT admin_user_id FROM conversations WHERE id = $1`,
+      [conversationId]
+    );
+    if (adminRows[0]?.admin_user_id === req.user.id) {
+      await promoteOldestMember(conversationId, req.user.id);
     }
     await pool.query(
       `DELETE FROM conversation_members WHERE conversation_id = $1 AND user_id = $2`,
@@ -2429,6 +2548,38 @@ app.delete("/api/conversations/:id/members/me", requireAuth, async (req, res) =>
   } catch (err) {
     console.error("Gruppe verlassen fehlgeschlagen:", err);
     return sendError(res, 500, "Gruppe konnte nicht verlassen werden.");
+  }
+});
+
+app.delete("/api/conversations/:id/members/:userId", requireAuth, requireApproved, async (req, res) => {
+  try {
+    const conversationId = parsePositiveInt(req.params.id);
+    const targetId = parsePositiveInt(req.params.userId);
+    if (!conversationId || !targetId) return sendError(res, 400, "Ungültige Unterhaltung.");
+    if (!(await isConversationMember(req.user.id, conversationId))) {
+      return sendError(res, 403, "Kein Zugriff auf diese Unterhaltung.");
+    }
+    await requireGroupAdmin(req.user.id, conversationId);
+    if (targetId === req.user.id) {
+      return sendError(res, 400, "Dich selbst entfernst du über „Gruppe verlassen“.");
+    }
+    if (!(await isConversationMember(targetId, conversationId))) {
+      return sendError(res, 404, "Diese Person ist nicht in der Gruppe.");
+    }
+    await pool.query(
+      `DELETE FROM conversation_members WHERE conversation_id = $1 AND user_id = $2`,
+      [conversationId, targetId]
+    );
+    for (const sock of socketsForUser(targetId)) {
+      sock.leave(conversationRoom(conversationId));
+      sock.emit("conversation:left", { conversationId });
+    }
+    const payload = await getConversationPayload(conversationId, req.user.id);
+    io.to(conversationRoom(conversationId)).emit("conversation:updated", payload);
+    return res.json(payload);
+  } catch (err) {
+    console.error("Mitglied entfernen fehlgeschlagen:", err);
+    return sendError(res, err.status || 500, err.message || "Person konnte nicht entfernt werden.");
   }
 });
 
@@ -2984,6 +3135,34 @@ app.post("/api/me/avatar", requireAuth, uploadLimiter, handleMulter, async (req,
     const status = err.status || 500;
     if (status >= 500) console.error("Avatar-Upload fehlgeschlagen:", err);
     return sendError(res, status, err.message || "Avatar konnte nicht gespeichert werden.");
+  }
+});
+
+app.post("/api/conversations/:id/avatar", requireAuth, requireApproved, uploadLimiter, handleMulter, async (req, res) => {
+  try {
+    const conversationId = parsePositiveInt(req.params.id);
+    if (!conversationId) return sendError(res, 400, "Ungültige Unterhaltung.");
+    if (!(await isConversationMember(req.user.id, conversationId))) {
+      return sendError(res, 403, "Kein Zugriff auf diese Unterhaltung.");
+    }
+    await requireGroupAdmin(req.user.id, conversationId);
+    if (!req.file?.buffer) {
+      return sendError(res, 400, "Kein Bild empfangen.");
+    }
+    const saved = await persistUpload({
+      userId: req.user.id,
+      kind: "avatar",
+      buffer: req.file.buffer,
+    });
+    const avatarUrl = `/api/files/${saved.id}`;
+    await pool.query(`UPDATE conversations SET avatar_url = $1 WHERE id = $2`, [avatarUrl, conversationId]);
+    const payload = await getConversationPayload(conversationId, req.user.id);
+    io.to(conversationRoom(conversationId)).emit("conversation:updated", payload);
+    return res.json(payload);
+  } catch (err) {
+    const status = err.status || 500;
+    if (status >= 500) console.error("Gruppen-Avatar fehlgeschlagen:", err);
+    return sendError(res, status, err.message || "Gruppenbild konnte nicht gespeichert werden.");
   }
 });
 

@@ -1,5 +1,5 @@
 /* global self, caches, fetch, clients */
-const CACHE = "raum-shell-v12";
+const CACHE = "mychat-shell-v17";
 const PRECACHE = [
   "/",
   "/index.html",
@@ -98,11 +98,11 @@ async function handlePush(event) {
     ? data.conversationId
     : null;
 
-  await self.registration.showNotification(data.title || "Raum", {
+  await self.registration.showNotification(data.title || "MyChat", {
     body: data.body || "Neue Nachricht",
     icon: data.icon || "/icons/icon-192.png",
     badge: data.badge || "/icons/icon-192.png",
-    tag: data.tag || "raum",
+    tag: data.tag || "mychat",
     renotify: true,
     data: { conversationId },
   });

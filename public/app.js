@@ -29,8 +29,8 @@
   const UI_STORAGE_KEY = "raum-ui";
   const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
   const BUBBLE_DEFAULTS = {
-    light: { own: "#fde68a", peer: "#ffffff" },
-    dark: { own: "#92400e", peer: "#27272a" },
+    light: { own: "#fef3c7", peer: "#e0f2fe" },
+    dark: { own: "#3d5a66", peer: "#2d3440" },
   };
 
   const viewAuth = document.getElementById("view-auth");
@@ -78,6 +78,8 @@
   const searchPicked = document.getElementById("search-picked");
   const formUserSearch = document.getElementById("form-user-search");
   const btnStartChat = document.getElementById("btn-start-chat");
+  const newGroupTitleWrap = document.getElementById("new-group-title-wrap");
+  const newGroupTitle = document.getElementById("new-group-title");
   const newChatError = document.getElementById("new-chat-error");
   const btnNewChat = document.getElementById("btn-new-chat");
   const btnNewChatClose = document.getElementById("btn-new-chat-close");
@@ -174,6 +176,14 @@
   const groupAddUser = document.getElementById("group-add-user");
   const btnGroupAdd = document.getElementById("btn-group-add");
   const btnGroupLeave = document.getElementById("btn-group-leave");
+  const groupAvatarPreview = document.getElementById("group-avatar-preview");
+  const groupAdminAvatar = document.getElementById("group-admin-avatar");
+  const groupAvatarFile = document.getElementById("group-avatar-file");
+  const btnGroupAvatarClear = document.getElementById("btn-group-avatar-clear");
+  const groupAvatarHint = document.getElementById("group-avatar-hint");
+  const groupMembers = document.getElementById("group-members");
+  const groupAdminFields = document.getElementById("group-admin-fields");
+  const groupAdminHint = document.getElementById("group-admin-hint");
   const summaryBox = document.getElementById("summary-box");
   const forwardOverlay = document.getElementById("forward-overlay");
   const messageMenuOverlay = document.getElementById("message-menu-overlay");
@@ -403,7 +413,7 @@
     document.documentElement.dataset.theme = uiPrefs.theme;
     if (themeColorMeta) {
       const hex = getComputedStyle(document.documentElement).getPropertyValue("--theme-hex").trim();
-      themeColorMeta.setAttribute("content", hex || (dark ? "#09090b" : "#fafafa"));
+      themeColorMeta.setAttribute("content", hex || (dark ? "#1e1b18" : "#fffbf5"));
     }
     if (colorSchemeMeta) {
       colorSchemeMeta.setAttribute("content", uiPrefs.theme === "auto" ? "dark light" : uiPrefs.theme);
@@ -513,9 +523,9 @@
     tabListChats.className = pillClass(chats);
     tabListContacts.className = pillClass(!chats);
     const navOn =
-      "flex h-auto min-h-11 flex-1 flex-col items-center justify-center gap-0.5 py-1 text-foreground";
+      "flex h-auto min-h-11 flex-1 flex-col items-center justify-center gap-0.5 rounded-xl bg-muted py-1.5 text-foreground";
     const navOff =
-      "flex h-auto min-h-11 flex-1 flex-col items-center justify-center gap-0.5 py-1 text-muted-foreground";
+      "flex h-auto min-h-11 flex-1 flex-col items-center justify-center gap-0.5 rounded-xl py-1.5 text-muted-foreground hover:bg-muted/70";
     navChats.className = chats ? navOn : navOff;
     navContacts.className = chats ? navOff : navOn;
     navChats.setAttribute("aria-current", chats ? "page" : "false");
@@ -1058,7 +1068,9 @@
     if (conv.type === "dm" && conv.peer) return lastSeenLabel(conv.peer);
     if (conv.type === "group") {
       const n = (conv.members || []).length;
-      return `${n} Mitglieder`;
+      const admin = (conv.members || []).find((member) => member.isAdmin || member.id === conv.adminUserId);
+      const adminName = admin ? displayName(admin) : "";
+      return adminName ? `${n} Mitglieder · Leitung: ${adminName}` : `${n} Mitglieder`;
     }
     return "";
   }
@@ -1140,17 +1152,13 @@
   function openForward(messageId) {
     forwardMessageId = messageId;
     forwardTargets.replaceChildren();
-    const globalItem = el("li", "");
-    const globalBtn = el(
-      "button",
-      "flex min-h-11 w-full items-center rounded-xl px-3 text-left text-sm hover:bg-muted",
-      "Globaler Chat"
-    );
-    globalBtn.type = "button";
-    globalBtn.addEventListener("click", () => forwardTo(null));
-    globalItem.append(globalBtn);
-    forwardTargets.append(globalItem);
-    for (const conv of conversations) {
+    const targets = conversations.filter((conv) => !isAssistantConversation(conv));
+    if (!targets.length) {
+      forwardTargets.append(el("li", "px-3 py-3 text-sm text-muted-foreground", "Keine Chats zum Weiterleiten."));
+      setForwardPanel(true);
+      return;
+    }
+    for (const conv of targets) {
       const item = el("li", "");
       const btn = el(
         "button",
@@ -1335,7 +1343,7 @@
     const params = new URLSearchParams(window.location.search);
     const raw = params.get("c");
     if (raw == null || raw === "") return undefined;
-    if (raw === "global") return null;
+    if (raw === "global") return undefined;
     const id = Number(raw);
     return Number.isInteger(id) && id > 0 ? id : undefined;
   }
@@ -1343,9 +1351,9 @@
   function notifyIncoming(message) {
     if (notifyPermission !== "granted") return;
     if (!message || (currentUser && message.userId === currentUser.id)) return;
+    if (message.conversationId == null) return;
     if (!document.hidden && sameRoom(message.conversationId ?? null)) return;
     if (document.hidden && pushSubscribed) return;
-    if (message.conversationId == null && currentUser?.globalMuted) return;
     const conv = conversations.find((c) => c.id === message.conversationId);
     if (conv?.muted) return;
     try {
@@ -1356,28 +1364,10 @@
       });
       n.addEventListener("click", () => {
         window.focus();
-        openConversation(message.conversationId ?? null);
+        openConversation(message.conversationId);
       });
     } catch {
       // Browser kann Notifications stillschweigend ablehnen.
-    }
-  }
-
-  async function openAssistant() {
-    if (!canPost()) {
-      showError(chatError, "Dein Konto wartet noch auf Freigabe durch einen Admin.");
-      return;
-    }
-    try {
-      const conv = await api("/api/conversations", {
-        method: "POST",
-        body: JSON.stringify({ usernames: ["raum"] }),
-      });
-      upsertConversation(conv);
-      await openConversation(conv.id);
-      setNavPanel(false);
-    } catch (err) {
-      showError(chatError, err.message);
     }
   }
 
@@ -2103,10 +2093,30 @@
   function conversationLabel(conv) {
     if (!conv) return "Chat";
     if (conv.type === "dm" && conv.peer) return displayName(conv.peer);
+    if (conv.title) return conv.title;
     const names = (conv.members || [])
       .filter((m) => !currentUser || m.id !== currentUser.id)
       .map(displayName);
     return names.length ? names.join(", ") : "Gruppe";
+  }
+
+  function conversationAvatarUser(conv) {
+    if (conv?.type === "dm" && conv.peer) return conv.peer;
+    return {
+      username: conversationLabel(conv) || "Gruppe",
+      realName: conversationLabel(conv) || "Gruppe",
+      avatarUrl: conv?.avatarUrl || "",
+    };
+  }
+
+  function applyConversationViewer(conv) {
+    if (!conv || conv.type !== "group") return conv;
+    conv.isAdmin = Boolean(currentUser && conv.adminUserId === currentUser.id);
+    conv.members = (conv.members || []).map((member) => ({
+      ...member,
+      isAdmin: Boolean(conv.adminUserId && member.id === conv.adminUserId),
+    }));
+    return conv;
   }
 
   function isAssistantConversation(conv) {
@@ -2125,21 +2135,13 @@
       return;
     }
     if (activeConversationId == null) {
-      roomTitle.textContent = "Globaler Chat";
-      roomStatus.textContent = "Für alle Angemeldeten";
-      fillAvatar(threadAvatar, { username: "global", realName: "Globaler Chat" }, "h-10 w-10");
-      refreshComposerLock();
-      refreshAttachTray();
+      closeThread();
       return;
     }
     const conv = conversations.find((c) => c.id === activeConversationId);
     roomTitle.textContent = conversationLabel(conv);
     roomStatus.textContent = roomStatusText(conv);
-    const avatarUser =
-      conv?.type === "dm" && conv.peer
-        ? conv.peer
-        : { username: "Gruppe", realName: conversationLabel(conv), avatarUrl: "" };
-    fillAvatar(threadAvatar, avatarUser, "h-10 w-10");
+    fillAvatar(threadAvatar, conversationAvatarUser(conv), "h-10 w-10");
     refreshComposerLock();
     refreshAttachTray();
   }
@@ -2266,7 +2268,7 @@
   }
 
   function appendConversationRow({ title, preview, time, unread, avatarUser, active, onClick, pinned, muted, receipt, swipe }) {
-    const item = el("li", swipe ? "conv-swipe border-b border-border/60" : "border-b border-border/60");
+    const item = el("li", active ? "conv-swipe is-selected" : "conv-swipe");
     const btn = el("button", conversationRowClass(active));
     btn.type = "button";
     const avatarHost = el("div", "");
@@ -2351,39 +2353,21 @@
   function renderConversationLists() {
     closeOpenSwipe();
     convList.replaceChildren();
-    appendConversationRow({
-      title: "Globaler Chat",
-      preview: "Für alle Angemeldeten",
-      time: "",
-      unread: globalUnread,
-      avatarUser: { username: "global", realName: "Globaler Chat" },
-      active: chatSelected && activeConversationId == null,
-      muted: Boolean(currentUser?.globalMuted),
-      onClick: openGlobal,
-    });
-    appendConversationRow({
-      title: "Assistent raum",
-      preview: "Hilfe und Kurzfassung",
-      time: "",
-      unread: 0,
-      avatarUser: { username: "raum", realName: "Assistent" },
-      active: chatSelected && isAssistantConversation(conversations.find((c) => c.id === activeConversationId)),
-      onClick: openAssistant,
-    });
 
     const privateChats = conversations.filter((conv) => !isAssistantConversation(conv));
     if (!privateChats.length) {
       convList.append(
-        el("li", "px-4 py-4 text-sm leading-snug text-muted-foreground", "Noch keine privaten Chats.")
+        el(
+          "li",
+          "px-4 py-4 text-sm leading-snug text-muted-foreground",
+          "Noch keine Chats. Tippe +, um eine Unterhaltung zu starten."
+        )
       );
       return;
     }
 
     for (const conv of privateChats) {
-      const avatarUser =
-        conv.type === "dm" && conv.peer
-          ? conv.peer
-          : { username: "Gruppe", realName: "Gruppe", avatarUrl: "" };
+      const avatarUser = conversationAvatarUser(conv);
       appendConversationRow({
         title: conversationLabel(conv),
         preview: previewText(conv.lastMessage) || "Keine Nachrichten",
@@ -2447,6 +2431,7 @@
   async function loadConversations() {
     try {
       conversations = await api("/api/conversations");
+      conversations = conversations.map(applyConversationViewer);
       sortConversations();
       renderConversationLists();
       updateRoomHeader();
@@ -2458,6 +2443,7 @@
 
   function upsertConversation(conv) {
     if (!conv?.id) return;
+    applyConversationViewer(conv);
     const idx = conversations.findIndex((c) => c.id === conv.id);
     if (idx >= 0) conversations.splice(idx, 1);
     conversations.unshift(conv);
@@ -2489,6 +2475,10 @@
   }
 
   async function openConversation(conversationId) {
+    if (conversationId == null || conversationId === "" || conversationId === "global") {
+      closeThread();
+      return;
+    }
     emitTyping(false);
     setReplyTarget(null);
     clearEdit();
@@ -2516,22 +2506,21 @@
     });
   }
 
-  function openGlobal() {
-    openConversation(null);
-  }
-
-  async function startConversationWith(usernames) {
+  async function startConversationWith(usernames, title) {
     showError(newChatError, "");
     const names = [...new Set(usernames.map((n) => n.toLowerCase()))];
     if (!names.length) return;
     try {
+      const body = { usernames: names };
+      if (names.length >= 2 && title) body.title = title;
       const conv = await api("/api/conversations", {
         method: "POST",
-        body: JSON.stringify({ usernames: names }),
+        body: JSON.stringify(body),
       });
       upsertConversation(conv);
       pickedUsers.clear();
       renderPicked();
+      if (newGroupTitle) newGroupTitle.value = "";
       userSearch.value = "";
       userSearchResults.replaceChildren();
       setNewChatPanel(false);
@@ -2552,10 +2541,10 @@
     userList.replaceChildren();
     for (const user of users) {
       const isSelf = currentUser && user.id === currentUser.id;
-      const item = el("li", "");
+      const item = el("li", "overflow-hidden rounded-2xl bg-card shadow-lg shadow-black/10 ring-1 ring-border");
       const btn = el(
         "button",
-        "flex min-h-14 w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-muted whitespace-normal"
+        "flex min-h-14 w-full items-center gap-3 rounded-2xl px-3 py-2 text-left hover:bg-muted whitespace-normal"
       );
       btn.type = "button";
       btn.disabled = Boolean(isSelf);
@@ -2591,6 +2580,7 @@
     setOverlay(newChatOverlay, open);
     if (open) {
       showError(newChatError, "");
+      if (newGroupTitle) newGroupTitle.value = "";
       userSearch.focus();
       searchUsers(userSearch.value);
     }
@@ -2645,8 +2635,14 @@
       searchPicked.append(chip);
     }
     const show = pickedUsers.size > 0;
+    const isGroup = pickedUsers.size >= 2;
     btnStartChat.classList.toggle("hidden", !show);
     btnStartChat.classList.toggle("flex", show);
+    btnStartChat.textContent = isGroup ? "Gruppe starten" : "Chat starten";
+    if (newGroupTitleWrap) {
+      newGroupTitleWrap.classList.toggle("hidden", !isGroup);
+      newGroupTitleWrap.classList.toggle("flex", isGroup);
+    }
   }
 
   function renderSearchResults(users) {
@@ -2798,7 +2794,10 @@
 
     socket.on("conversation:updated", (conv) => {
       upsertConversation(conv);
-      if (Number(conv?.id) === Number(activeConversationId)) updateRoomHeader();
+      if (Number(conv?.id) === Number(activeConversationId)) {
+        updateRoomHeader();
+        if (chatMenuOverlay && !chatMenuOverlay.hidden) refreshGroupTools();
+      }
     });
 
     socket.on("conversation:left", (payload) => {
@@ -3387,11 +3386,7 @@
   function setChatMenu(open) {
     setOverlay(chatMenuOverlay, open);
     btnChatMenu.setAttribute("aria-expanded", String(open));
-    const conv = activeConversation();
-    const isGroup = Boolean(conv && conv.type === "group");
-    groupTools.classList.toggle("hidden", !isGroup);
-    groupTools.classList.toggle("flex", isGroup);
-    if (isGroup) groupTitle.value = conv.title || "";
+    refreshGroupTools();
     if (summaryBox) {
       summaryBox.classList.add("hidden");
       summaryBox.textContent = "";
@@ -3404,6 +3399,116 @@
     refreshNotifyButtons();
     refreshMuteButton();
     refreshBlockButton();
+  }
+
+  function refreshGroupTools() {
+    const conv = activeConversation();
+    const isGroup = Boolean(conv && conv.type === "group");
+    groupTools.classList.toggle("hidden", !isGroup);
+    groupTools.classList.toggle("flex", isGroup);
+    if (!isGroup) return;
+
+    const isAdmin = Boolean(conv.isAdmin);
+    groupTitle.value = conv.title || "";
+    fillAvatar(groupAvatarPreview, conversationAvatarUser(conv), "h-14 w-14");
+    if (groupAvatarFile) groupAvatarFile.value = "";
+
+    if (groupAdminAvatar) {
+      groupAdminAvatar.classList.toggle("hidden", !isAdmin);
+      groupAdminAvatar.classList.toggle("flex", isAdmin);
+    }
+    if (groupAvatarHint) {
+      groupAvatarHint.classList.toggle("hidden", isAdmin);
+    }
+    if (groupAdminFields) {
+      groupAdminFields.classList.toggle("hidden", !isAdmin);
+      groupAdminFields.classList.toggle("flex", isAdmin);
+    }
+    if (groupAdminHint) {
+      groupAdminHint.classList.toggle("hidden", isAdmin);
+    }
+    if (btnGroupAvatarClear) {
+      const showClear = isAdmin && Boolean(conv.avatarUrl);
+      btnGroupAvatarClear.classList.toggle("hidden", !showClear);
+      btnGroupAvatarClear.classList.toggle("flex", showClear);
+    }
+    renderGroupMembers(conv, isAdmin);
+  }
+
+  function renderGroupMembers(conv, isAdmin) {
+    if (!groupMembers) return;
+    groupMembers.replaceChildren();
+    const members = conv.members || [];
+    for (const member of members) {
+      const item = el("li", "flex min-h-11 items-center gap-2 rounded-xl px-1 py-1");
+      const avatar = el("div", "");
+      fillAvatar(avatar, member, "h-8 w-8");
+      const text = el("span", "min-w-0 flex-1");
+      text.append(el("span", "block truncate text-sm text-foreground", displayName(member)));
+      if (member.isAdmin) {
+        text.append(el("span", "block text-xs text-muted-foreground", "Gruppenleitung"));
+      } else if (currentUser && member.id === currentUser.id) {
+        text.append(el("span", "block text-xs text-muted-foreground", "Du"));
+      }
+      item.append(avatar, text);
+      if (isAdmin && currentUser && member.id !== currentUser.id) {
+        const actions = el("span", "flex shrink-0 items-center gap-1");
+        const makeAdmin = el(
+          "button",
+          "inline-flex h-11 min-h-11 items-center rounded-xl px-2 text-xs font-medium ring-1 ring-border",
+          "Leitung"
+        );
+        makeAdmin.type = "button";
+        makeAdmin.setAttribute("aria-label", `${displayName(member)} zur Leitung machen`);
+        makeAdmin.addEventListener("click", () => transferGroupAdmin(member));
+        const kick = el(
+          "button",
+          "inline-flex h-11 min-h-11 items-center rounded-xl px-2 text-xs font-medium text-red-700 hover:bg-red-100 dark:text-red-200 dark:hover:bg-red-950/50",
+          "Entfernen"
+        );
+        kick.type = "button";
+        kick.setAttribute("aria-label", `${displayName(member)} entfernen`);
+        kick.addEventListener("click", () => kickGroupMember(member));
+        actions.append(makeAdmin, kick);
+        item.append(actions);
+      }
+      groupMembers.append(item);
+    }
+  }
+
+  async function transferGroupAdmin(member) {
+    if (
+      !window.confirm(
+        `${displayName(member)} zur Gruppenleitung machen? Danach kannst du Name, Bild und Mitglieder nicht mehr allein ändern.`
+      )
+    ) {
+      return;
+    }
+    try {
+      const conv = await api(`/api/conversations/${activeConversationId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ adminUserId: member.id }),
+      });
+      upsertConversation(conv);
+      updateRoomHeader();
+      refreshGroupTools();
+    } catch (err) {
+      showError(chatError, err.message);
+    }
+  }
+
+  async function kickGroupMember(member) {
+    if (!window.confirm(`${displayName(member)} aus der Gruppe entfernen?`)) return;
+    try {
+      const conv = await api(`/api/conversations/${activeConversationId}/members/${member.id}`, {
+        method: "DELETE",
+      });
+      upsertConversation(conv);
+      updateRoomHeader();
+      refreshGroupTools();
+    } catch (err) {
+      showError(chatError, err.message);
+    }
   }
 
   function currentChatMuted() {
@@ -3664,6 +3769,7 @@
       });
       upsertConversation(conv);
       updateRoomHeader();
+      refreshGroupTools();
     } catch (err) {
       showError(chatError, err.message);
     }
@@ -3677,6 +3783,7 @@
       groupAddUser.value = "";
       upsertConversation(conv);
       updateRoomHeader();
+      refreshGroupTools();
     } catch (err) {
       showError(chatError, err.message);
     }
@@ -3689,6 +3796,43 @@
       showError(chatError, err.message);
     }
   });
+  if (groupAvatarFile) {
+    groupAvatarFile.addEventListener("change", async () => {
+      const file = groupAvatarFile.files?.[0];
+      if (!file || !activeConversationId) return;
+      try {
+        const form = new FormData();
+        form.append("file", file);
+        const conv = await api(`/api/conversations/${activeConversationId}/avatar`, {
+          method: "POST",
+          body: form,
+        });
+        groupAvatarFile.value = "";
+        upsertConversation(conv);
+        updateRoomHeader();
+        refreshGroupTools();
+      } catch (err) {
+        groupAvatarFile.value = "";
+        showError(chatError, err.message);
+      }
+    });
+  }
+  if (btnGroupAvatarClear) {
+    btnGroupAvatarClear.addEventListener("click", async () => {
+      if (!activeConversationId) return;
+      try {
+        const conv = await api(`/api/conversations/${activeConversationId}`, {
+          method: "PATCH",
+          body: JSON.stringify({ avatarUrl: "" }),
+        });
+        upsertConversation(conv);
+        updateRoomHeader();
+        refreshGroupTools();
+      } catch (err) {
+        showError(chatError, err.message);
+      }
+    });
+  }
   btnForwardClose.addEventListener("click", () => setForwardPanel(false));
   forwardBackdrop.addEventListener("click", () => setForwardPanel(false));
   messageMenuBackdrop.addEventListener("click", () => {
@@ -3722,7 +3866,8 @@
 
   formUserSearch.addEventListener("submit", (event) => {
     event.preventDefault();
-    startConversationWith([...pickedUsers.keys()]);
+    const title = pickedUsers.size >= 2 ? (newGroupTitle?.value || "").trim() : "";
+    startConversationWith([...pickedUsers.keys()], title);
   });
   userSearch.addEventListener("input", () => scheduleSearch(userSearch.value));
   userSearch.addEventListener("focus", () => scheduleSearch(userSearch.value));
