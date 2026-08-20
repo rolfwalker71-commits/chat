@@ -128,6 +128,28 @@
         font-size: 18px;
       }
 
+      /* Chatkarten und Thread +1px; Login, Dock, Overlays bleiben bei 18px. */
+      #conv-list .text-xs,
+      #thread-active .text-xs {
+        font-size: calc(0.75rem + 1px);
+      }
+      #conv-list .text-sm,
+      #thread-active .text-sm {
+        font-size: calc(0.875rem + 1px);
+      }
+      #conv-list .text-base,
+      #thread-active .text-base {
+        font-size: calc(1rem + 1px);
+      }
+      #thread-active .text-\[0\.7rem\] {
+        font-size: calc(0.7rem + 1px);
+      }
+      @media (min-width: 640px) {
+        #thread-active .sm\:text-base {
+          font-size: calc(1rem + 1px);
+        }
+      }
+
       html,
       body {
         height: var(--app-height);
