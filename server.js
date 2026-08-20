@@ -17,7 +17,7 @@
  *   - Private Chats: conversations + conversation_members; Socket-Raum
  *     "conversation:<id>". Beitritt und Senden nur nach Mitgliedschaftsprüfung.
  *
- * Nachrichtentypen: text | image | location | voice | file
+ * Nachrichtentypen: text | image | location | voice | file | video | poll | enroute
  *
  * Interaktion (Echtzeit):
  *   - Tipp-Anzeige, Reactions, Antworten, Soft-Delete, Ungelesen, Suche
@@ -348,6 +348,104 @@ function isValidLatLng(lat, lng) {
   return Number.isFinite(lat) && Number.isFinite(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180;
 }
 
+const GEOCODE_HOST = "nominatim.openstreetmap.org";
+const ROUTE_HOST = "router.project-osrm.org";
+let nominatimChain = Promise.resolve();
+
+function afterNominatim() {
+  return new Promise((resolve) => setTimeout(resolve, 1100));
+}
+
+async function fetchPinnedJson(host, href) {
+  let parsed;
+  try {
+    parsed = new URL(href);
+  } catch {
+    const error = new Error("Ungültige Anfrage.");
+    error.status = 500;
+    throw error;
+  }
+  if (parsed.protocol !== "https:" || parsed.hostname.toLowerCase() !== host) {
+    const error = new Error("Ungültige Anfrage.");
+    error.status = 500;
+    throw error;
+  }
+  const lookedUp = await dns.lookup(host, { all: true });
+  if (!lookedUp.length || lookedUp.some((entry) => isBlockedIp(entry.address))) {
+    const error = new Error("Kartendienst nicht erreichbar.");
+    error.status = 502;
+    throw error;
+  }
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 8000);
+  try {
+    const res = await fetch(parsed.href, {
+      method: "GET",
+      redirect: "error",
+      signal: ac.signal,
+      headers: {
+        "User-Agent": "MyChat/1.0 (enroute)",
+        Accept: "application/json",
+      },
+    });
+    if (!res.ok) {
+      const error = new Error("Kartendienst nicht erreichbar.");
+      error.status = 502;
+      throw error;
+    }
+    return await res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function estimateEnroute(originLat, originLng, query) {
+  const q = sanitizeText(String(query || "")).slice(0, 200);
+  if (q.length < 3) {
+    const error = new Error("Bitte ein Ziel mit mindestens 3 Zeichen angeben.");
+    error.status = 400;
+    throw error;
+  }
+  const geoUrl = `https://${GEOCODE_HOST}/search?format=jsonv2&limit=1&q=${encodeURIComponent(q)}`;
+  const geo = await new Promise((resolve, reject) => {
+    nominatimChain = nominatimChain
+      .then(() => fetchPinnedJson(GEOCODE_HOST, geoUrl))
+      .then((data) => {
+        resolve(data);
+        return afterNominatim();
+      })
+      .catch((err) => {
+        reject(err);
+        return afterNominatim();
+      });
+  });
+  const hit = Array.isArray(geo) ? geo[0] : null;
+  const destLat = Number(hit?.lat);
+  const destLng = Number(hit?.lon);
+  if (!isValidLatLng(destLat, destLng)) {
+    const error = new Error("Dieses Ziel wurde nicht gefunden.");
+    error.status = 404;
+    throw error;
+  }
+  const destLabel = sanitizeText(hit.display_name || q).slice(0, 160);
+  let durationMin = null;
+  let etaAt = null;
+  if (isValidLatLng(originLat, originLng)) {
+    try {
+      const routeUrl = `https://${ROUTE_HOST}/route/v1/driving/${originLng},${originLat};${destLng},${destLat}?overview=false`;
+      const route = await fetchPinnedJson(ROUTE_HOST, routeUrl);
+      const seconds = Number(route?.routes?.[0]?.duration);
+      if (Number.isFinite(seconds) && seconds >= 0) {
+        durationMin = Math.max(1, Math.round(seconds / 60));
+        etaAt = new Date(Date.now() + seconds * 1000).toISOString();
+      }
+    } catch {
+      // Schätzung ist optional; Ziel geht trotzdem.
+    }
+  }
+  return { destLabel, destLat, destLng, durationMin, etaAt };
+}
+
 function conversationRoom(id) {
   return `conversation:${id}`;
 }
@@ -430,6 +528,7 @@ function mapMessage(row) {
     starred: false,
     poll: null,
     linkPreview: null,
+    trip: null,
   };
 
   if (row.reply_to_id) {
@@ -469,13 +568,25 @@ function mapMessage(row) {
     };
   }
 
+  if (!deleted && type === "enroute" && row.trip && typeof row.trip === "object") {
+    const destLat = Number(row.trip.destLat ?? row.location_lat);
+    const destLng = Number(row.trip.destLng ?? row.location_lng);
+    message.trip = {
+      destination: String(row.trip.destination || row.content || "").slice(0, 160),
+      destLat: Number.isFinite(destLat) ? destLat : null,
+      destLng: Number.isFinite(destLng) ? destLng : null,
+      etaAt: row.trip.etaAt ? String(row.trip.etaAt) : null,
+      durationMin: Number.isFinite(Number(row.trip.durationMin)) ? Number(row.trip.durationMin) : null,
+    };
+  }
+
   return message;
 }
 
 const MESSAGE_SELECT = `
   m.id, m.user_id, m.content, m.created_at, m.conversation_id,
   m.message_type, m.upload_id, m.location_lat, m.location_lng, m.location_accuracy,
-  m.reply_to_id, m.deleted_at, m.transcript, m.edited_at, m.link_preview,
+  m.reply_to_id, m.deleted_at, m.transcript, m.edited_at, m.link_preview, m.trip,
   u.username, u.real_name, u.avatar_url,
   up.mime AS upload_mime, up.duration_ms, up.original_name AS upload_name,
   r.message_type AS reply_type, r.content AS reply_content, r.deleted_at AS reply_deleted_at,
@@ -893,6 +1004,7 @@ function fallbackContent(type, content, location) {
   if (type === "file") return text || "Datei";
   if (type === "video") return text || "Video";
   if (type === "poll") return text || "Umfrage";
+  if (type === "enroute") return text ? `Unterwegs nach ${text}` : "Unterwegs";
   if (type === "location" && location) {
     return `Standort: ${location.lat.toFixed(5)}, ${location.lng.toFixed(5)}`;
   }
@@ -958,6 +1070,14 @@ function ruleBasedBotReply(content) {
   return "Verstanden. /hilfe zeigt die Befehle. Für freie Antworten AI_API_KEY in der .env setzen.";
 }
 
+function enroutePreview(message) {
+  const dest = String(message?.trip?.destination || "").trim();
+  if (dest) return `Unterwegs nach ${dest}`;
+  const content = String(message?.content || "").trim();
+  if (!content) return "Unterwegs";
+  return content.startsWith("Unterwegs") ? content : `Unterwegs nach ${content}`;
+}
+
 function previewForward(message) {
   if (!message) return "";
   if (message.type === "image") return "Bild";
@@ -965,6 +1085,7 @@ function previewForward(message) {
   if (message.type === "file") return message.file?.name || "Datei";
   if (message.type === "video") return "Video";
   if (message.type === "poll") return "Umfrage";
+  if (message.type === "enroute") return enroutePreview(message);
   if (message.type === "location") return "Standort";
   return message.content || "";
 }
@@ -1575,6 +1696,7 @@ async function initDatabase() {
   await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS transcript TEXT`);
   await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS link_preview JSONB`);
+  await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS trip JSONB`);
 
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_messages_created_at
@@ -1735,6 +1857,7 @@ function pushPreview(message) {
   if (type === "file") return message.file?.name || "Datei";
   if (type === "video") return "Video";
   if (type === "poll") return "Umfrage";
+  if (type === "enroute") return enroutePreview(message);
   return String(message.content || "Neue Nachricht").slice(0, 140);
 }
 
@@ -3415,14 +3538,15 @@ async function insertAndBroadcastMessage({
   replyToId,
   transcript,
   poll,
+  trip,
 }) {
   const { rows } = await pool.query(
     `
     INSERT INTO messages (
       user_id, content, conversation_id, message_type, upload_id,
-      location_lat, location_lng, location_accuracy, reply_to_id, transcript
+      location_lat, location_lng, location_accuracy, reply_to_id, transcript, trip
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
     RETURNING id
     `,
     [
@@ -3436,6 +3560,7 @@ async function insertAndBroadcastMessage({
       location?.accuracy ?? null,
       replyToId,
       transcript ? sanitizeText(String(transcript)).slice(0, 2000) : null,
+      trip || null,
     ]
   );
 
@@ -3672,7 +3797,7 @@ io.on("connection", async (socket) => {
       }
 
       const type = sanitizeText(String(payload?.type || "text")) || "text";
-      if (!["text", "image", "location", "voice", "file", "video", "poll"].includes(type)) {
+      if (!["text", "image", "location", "voice", "file", "video", "poll", "enroute"].includes(type)) {
         respond({ ok: false, error: "Unbekannter Nachrichtentyp." });
         return;
       }
@@ -3760,6 +3885,41 @@ io.on("connection", async (socket) => {
           conversationId,
           type,
           location: { lat, lng, accuracy },
+          replyToId,
+        });
+        respond({ ok: true, id: message.id });
+        return;
+      }
+
+      if (type === "enroute") {
+        const originLat = Number(payload?.lat ?? payload?.origin?.lat);
+        const originLng = Number(payload?.lng ?? payload?.origin?.lng);
+        const hasOrigin = isValidLatLng(originLat, originLng);
+        const destination = sanitizeText(String(payload?.destination || ""));
+        let trip;
+        try {
+          trip = await estimateEnroute(
+            hasOrigin ? originLat : NaN,
+            hasOrigin ? originLng : NaN,
+            destination
+          );
+        } catch (err) {
+          respond({ ok: false, error: err.message || "Ziel konnte nicht ermittelt werden." });
+          return;
+        }
+        const message = await insertAndBroadcastMessage({
+          user: liveUser,
+          conversationId,
+          type,
+          content: `Unterwegs nach ${trip.destLabel}`.slice(0, MAX_MESSAGE_LENGTH),
+          location: { lat: trip.destLat, lng: trip.destLng, accuracy: null },
+          trip: {
+            destination: trip.destLabel,
+            destLat: trip.destLat,
+            destLng: trip.destLng,
+            etaAt: trip.etaAt,
+            durationMin: trip.durationMin,
+          },
           replyToId,
         });
         respond({ ok: true, id: message.id });

@@ -876,6 +876,14 @@
                   </span>
                   <span class="text-xs font-medium leading-snug">Video</span>
                 </button>
+                <button type="button" id="btn-attach-enroute" role="menuitem" class="flex h-auto min-h-0 flex-col items-center gap-1 rounded-2xl px-1 py-2 text-foreground hover:bg-muted">
+                  <span class="inline-flex h-11 min-h-11 w-11 items-center justify-center rounded-full bg-muted text-primary" aria-hidden="true">
+                    <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M3 11l19-9-9 19-2-8-8-2Z" />
+                    </svg>
+                  </span>
+                  <span class="text-xs font-medium leading-snug">Unterwegs</span>
+                </button>
                 <button type="button" id="btn-attach-poll" role="menuitem" class="hidden h-auto min-h-0 flex-col items-center gap-1 rounded-2xl px-1 py-2 text-foreground hover:bg-muted">
                   <span class="inline-flex h-11 min-h-11 w-11 items-center justify-center rounded-full bg-muted text-primary" aria-hidden="true">
                     <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1510,6 +1518,39 @@
             <p id="poll-error" class="hidden text-sm text-red-700 dark:text-red-200" role="alert"></p>
             <button type="submit" id="btn-poll-send" class="inline-flex h-12 min-h-11 items-center justify-center rounded-xl bg-primary text-sm font-semibold text-primary-foreground hover:brightness-110">
               Umfrage senden
+            </button>
+          </form>
+        </section>
+      </div>
+    </div>
+
+    <div id="enroute-overlay" class="fixed inset-0 z-50 hidden" hidden>
+      <button type="button" id="enroute-backdrop" class="absolute inset-0 bg-black/60" aria-label="Unterwegs schließen"></button>
+      <div class="flex min-h-full items-end justify-center p-4 sm:items-center">
+        <section class="relative w-full max-w-sm rounded-2xl bg-card p-5 shadow-2xl ring-1 ring-border" role="dialog" aria-modal="true" aria-labelledby="enroute-title">
+          <div class="mb-3 flex items-center justify-between gap-3">
+            <h2 id="enroute-title" class="text-base font-semibold">Unterwegs</h2>
+            <button type="button" id="btn-enroute-close" class="inline-flex h-11 min-h-11 items-center rounded-xl px-3 text-sm ring-1 ring-border">
+              Schließen
+            </button>
+          </div>
+          <form id="form-enroute" class="flex flex-col gap-3">
+            <label for="enroute-destination" class="text-sm font-medium">Zieladresse</label>
+            <input
+              id="enroute-destination"
+              type="text"
+              maxlength="200"
+              required
+              autocomplete="street-address"
+              class="h-12 w-full rounded-xl bg-input px-4 text-base text-foreground ring-1 ring-border placeholder:text-muted-foreground"
+              placeholder="z. B. Bahnhofstraße 1, Köln"
+            />
+            <p class="text-sm leading-relaxed text-muted-foreground">
+              Einmalige Schätzung aus deinem Standort. Es gibt kein Live-Tracking.
+            </p>
+            <p id="enroute-error" class="hidden text-sm text-red-700 dark:text-red-200" role="alert"></p>
+            <button type="submit" id="btn-enroute-send" class="inline-flex h-12 min-h-11 items-center justify-center rounded-xl bg-primary text-sm font-semibold text-primary-foreground hover:brightness-110">
+              Senden
             </button>
           </form>
         </section>

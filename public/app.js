@@ -170,6 +170,14 @@
   const btnPollAdd = document.getElementById("btn-poll-add");
   const pollError = document.getElementById("poll-error");
   const btnPollSend = document.getElementById("btn-poll-send");
+  const btnAttachEnroute = document.getElementById("btn-attach-enroute");
+  const enrouteOverlay = document.getElementById("enroute-overlay");
+  const enrouteBackdrop = document.getElementById("enroute-backdrop");
+  const btnEnrouteClose = document.getElementById("btn-enroute-close");
+  const formEnroute = document.getElementById("form-enroute");
+  const enrouteDestination = document.getElementById("enroute-destination");
+  const enrouteError = document.getElementById("enroute-error");
+  const btnEnrouteSend = document.getElementById("btn-enroute-send");
   const groupTools = document.getElementById("group-tools");
   const groupTitle = document.getElementById("group-title");
   const btnGroupTitle = document.getElementById("btn-group-title");
@@ -958,6 +966,15 @@
     return `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lng}#map=16/${lat}/${lng}`;
   }
 
+  function formatEta(iso) {
+    if (!iso) return "";
+    try {
+      return new Intl.DateTimeFormat("de-DE", { hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
+    } catch {
+      return "";
+    }
+  }
+
   function previewText(message) {
     if (!message) return "";
     if (message.deleted) return "Nachricht gelöscht";
@@ -968,6 +985,10 @@
     if (type === "file") return message.file?.name || "Datei";
     if (type === "video") return "Video";
     if (type === "poll") return "Umfrage";
+    if (type === "enroute") {
+      const dest = message.trip?.destination || message.content || "";
+      return dest.startsWith("Unterwegs") ? dest : dest ? `Unterwegs nach ${dest}` : "Unterwegs";
+    }
     if (type === "deleted") return "Nachricht gelöscht";
     return message.content || "";
   }
@@ -1956,6 +1977,36 @@
           card.append(link);
           bubble.append(card);
         }
+      } else if (type === "enroute") {
+        const trip = message.trip || {};
+        const dest = trip.destination || message.content || "Ziel";
+        const card = el("div", "mt-1 rounded-xl bg-background/60 p-3 ring-1 ring-border");
+        card.append(el("p", "text-sm font-medium", "Unterwegs nach"));
+        card.append(el("p", "mt-1 break-words text-sm leading-snug text-foreground", dest.replace(/^Unterwegs nach\s+/i, "")));
+        const eta = formatEta(trip.etaAt);
+        const mins = Number(trip.durationMin);
+        const estimate = [];
+        if (eta) estimate.push(`Ankunft ca. ${eta}`);
+        if (Number.isFinite(mins) && mins > 0) estimate.push(`${mins} Min`);
+        if (estimate.length) {
+          card.append(el("p", "mt-1 text-sm text-muted-foreground", estimate.join(" · ")));
+          card.append(
+            el("p", "mt-1 text-xs text-muted-foreground", "Schätzung beim Senden, ohne Live-Aktualisierung")
+          );
+        }
+        const destLat = Number(trip.destLat);
+        const destLng = Number(trip.destLng);
+        if (Number.isFinite(destLat) && Number.isFinite(destLng)) {
+          const link = document.createElement("a");
+          link.href = osmUrl(destLat, destLng);
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+          link.className =
+            "mt-3 inline-flex h-11 min-h-11 items-center rounded-xl bg-primary px-3 text-sm font-semibold text-primary-foreground hover:brightness-110";
+          link.textContent = "Ziel in OpenStreetMap";
+          card.append(link);
+        }
+        bubble.append(card);
       } else if (type === "video" && message.file?.id && FILE_UUID.test(message.file.id)) {
         const video = document.createElement("video");
         video.controls = true;
@@ -3347,6 +3398,58 @@
     }
   }
 
+  function setEnroutePanel(open) {
+    setOverlay(enrouteOverlay, open);
+    if (open) {
+      showError(enrouteError, "");
+      enrouteDestination.value = "";
+      btnEnrouteSend.textContent = "Senden";
+      enrouteDestination.focus();
+    }
+  }
+
+  function getPositionOnce() {
+    return new Promise((resolve) => {
+      if (!navigator.geolocation) {
+        resolve(null);
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+        () => resolve(null),
+        { enableHighAccuracy: true, timeout: 12_000, maximumAge: 10_000 }
+      );
+    });
+  }
+
+  async function handleEnrouteSubmit(event) {
+    event.preventDefault();
+    showError(enrouteError, "");
+    const destination = enrouteDestination.value.trim();
+    if (destination.length < 3) {
+      showError(enrouteError, "Bitte ein Ziel mit mindestens 3 Zeichen angeben.");
+      return;
+    }
+    btnEnrouteSend.disabled = true;
+    btnEnrouteSend.textContent = "Standort wird ermittelt…";
+    try {
+      const origin = await getPositionOnce();
+      btnEnrouteSend.textContent = "Schätzung wird berechnet…";
+      const payload = { type: "enroute", destination };
+      if (origin) {
+        payload.lat = origin.lat;
+        payload.lng = origin.lng;
+      }
+      await emitMessage(payload);
+      setEnroutePanel(false);
+    } catch (err) {
+      showError(enrouteError, err.message);
+    } finally {
+      btnEnrouteSend.disabled = false;
+      btnEnrouteSend.textContent = "Senden";
+    }
+  }
+
   function addPollOptionInput() {
     if (pollOptions.children.length >= 8) return;
     const input = document.createElement("input");
@@ -3763,6 +3866,10 @@
     setAttachTray(false);
     handleLocation();
   });
+  btnAttachEnroute.addEventListener("click", () => {
+    setAttachTray(false);
+    setEnroutePanel(true);
+  });
   btnAttachVoice.addEventListener("click", startRecording);
   btnRecordCancel.addEventListener("click", () => stopRecording(false));
   btnRecordSend.addEventListener("click", () => stopRecording(true));
@@ -3792,6 +3899,9 @@
   pollBackdrop.addEventListener("click", () => setPollPanel(false));
   btnPollAdd.addEventListener("click", addPollOptionInput);
   formPoll.addEventListener("submit", handlePollSubmit);
+  btnEnrouteClose.addEventListener("click", () => setEnroutePanel(false));
+  enrouteBackdrop.addEventListener("click", () => setEnroutePanel(false));
+  formEnroute.addEventListener("submit", handleEnrouteSubmit);
   btnSummarize.addEventListener("click", async () => {
     showError(chatError, "");
     btnSummarize.disabled = true;
@@ -3930,6 +4040,7 @@
     else if (mediaOverlay && !mediaOverlay.hidden) setMediaPanel(false);
     else if (starredOverlay && !starredOverlay.hidden) setStarredPanel(false);
     else if (pollOverlay && !pollOverlay.hidden) setPollPanel(false);
+    else if (enrouteOverlay && !enrouteOverlay.hidden) setEnroutePanel(false);
     else if (!chatMenuOverlay.hidden) setChatMenu(false);
     else if (!profileOverlay.hidden) setProfilePanel(false);
     else if (!newChatOverlay.hidden) setNewChatPanel(false);
