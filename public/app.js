@@ -1080,8 +1080,8 @@
     if (!user) return "";
     if (user.isBot) return "Assistent";
     if (onlineIds.has(user.id)) return "online";
-    if (!user.lastSeenAt) return "zuletzt unbekannt";
-    return `zuletzt ${formatTime(user.lastSeenAt)}`;
+    if (!user.lastSeenAt) return "Zuletzt online: unbekannt";
+    return `Zuletzt online: ${formatTime(user.lastSeenAt)}`;
   }
 
   function roomStatusText(conv) {
