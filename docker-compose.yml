@@ -35,12 +35,14 @@ services:
   # Node.js-App (Express + Socket.io) — einziger nach außen offener Dienst
   # ---------------------------------------------------------------------------
   app:
-    # GHCR-Image; `docker compose up --build` baut lokal und taggt denselben Namen.
+    # GHCR-Image. Auf dem Server: `docker compose pull && docker compose up -d`
+    # (früher missing = nach dem ersten Pull nie wieder ein Update).
+    # Lokal weiter mit `docker compose up --build`.
     image: ghcr.io/rolfwalker71-commits/chat:latest
     build:
       context: .
       dockerfile: Dockerfile
-    pull_policy: missing
+    pull_policy: always
     container_name: chat-app
     restart: unless-stopped
     env_file:

@@ -2282,6 +2282,9 @@ app.use(
         res.setHeader("Cache-Control", "no-cache");
         res.setHeader("Service-Worker-Allowed", "/");
       }
+      if (filePath.endsWith(".html") || filePath.endsWith(".js")) {
+        res.setHeader("Cache-Control", "no-cache");
+      }
       if (filePath.endsWith(".webmanifest")) {
         res.setHeader("Content-Type", "application/manifest+json; charset=utf-8");
         res.setHeader("Cache-Control", "no-cache");
