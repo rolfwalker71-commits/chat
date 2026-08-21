@@ -1,5 +1,5 @@
 /* global self, caches, fetch, clients */
-const CACHE = "mychat-shell-v37";
+const CACHE = "mychat-shell-v38";
 const SHARE_CACHE = "mychat-share";
 const PRECACHE = [
   "/",
@@ -65,7 +65,7 @@ self.addEventListener("fetch", (event) => {
 
   if (networkFirst) {
     event.respondWith(
-      fetch(event.request)
+      fetch(event.request, { cache: "no-store" })
         .then((response) => {
           if (response.ok) {
             const copy = response.clone();
@@ -80,7 +80,7 @@ self.addEventListener("fetch", (event) => {
 
   event.respondWith(
     caches.match(event.request).then((cached) => {
-      const fetched = fetch(event.request)
+      const fetched = fetch(event.request, { cache: "no-store" })
         .then((response) => {
           if (response.ok) {
             const copy = response.clone();

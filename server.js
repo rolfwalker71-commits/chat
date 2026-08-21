@@ -2279,11 +2279,17 @@ app.use(
     index: false,
     setHeaders(res, filePath) {
       if (filePath.endsWith(`${path.sep}sw.js`)) {
-        res.setHeader("Cache-Control", "no-cache");
+        res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+        res.setHeader("Surrogate-Control", "no-store");
+        res.setHeader("CDN-Cache-Control", "no-store");
+        res.setHeader("Pragma", "no-cache");
         res.setHeader("Service-Worker-Allowed", "/");
       }
       if (filePath.endsWith(".html") || filePath.endsWith(".js")) {
-        res.setHeader("Cache-Control", "no-cache");
+        res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+        res.setHeader("Surrogate-Control", "no-store");
+        res.setHeader("CDN-Cache-Control", "no-store");
+        res.setHeader("Pragma", "no-cache");
       }
       if (filePath.endsWith(".webmanifest")) {
         res.setHeader("Content-Type", "application/manifest+json; charset=utf-8");

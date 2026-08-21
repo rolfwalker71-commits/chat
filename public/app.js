@@ -1761,7 +1761,7 @@
     if (!("serviceWorker" in navigator)) return null;
     const existing = await navigator.serviceWorker.getRegistration();
     if (existing) return existing;
-    return navigator.serviceWorker.register("/sw.js");
+    return navigator.serviceWorker.register("/sw.js?v=38");
   }
 
   async function enablePush({ request = false } = {}) {
@@ -4876,7 +4876,7 @@
   }
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("/sw.js").catch(() => {});
+    navigator.serviceWorker.register("/sw.js?v=38").catch(() => {});
     navigator.serviceWorker.addEventListener("message", (event) => {
       if (event.data?.type === "open-conversation" && currentUser) {
         openConversation(event.data.conversationId ?? null);
