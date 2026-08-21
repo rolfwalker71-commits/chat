@@ -30,8 +30,8 @@
   const UI_STORAGE_KEY = "raum-ui";
   const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
   const BUBBLE_DEFAULTS = {
-    light: { own: "#fef3c7", peer: "#e0f2fe" },
-    dark: { own: "#3d5a66", peer: "#2d3440" },
+    light: { own: "#ccfbf1", peer: "#ffffff" },
+    dark: { own: "#115e59", peer: "#1e293b" },
   };
 
   const viewAuth = document.getElementById("view-auth");
@@ -134,7 +134,6 @@
   const replyAuthor = document.getElementById("reply-author");
   const replyPreview = document.getElementById("reply-preview");
   const btnReplyCancel = document.getElementById("btn-reply-cancel");
-  const aiSuggestions = document.getElementById("ai-suggestions");
   const btnSearch = document.getElementById("btn-search");
   const btnSearchClose = document.getElementById("btn-search-close");
   const searchOverlay = document.getElementById("search-overlay");
@@ -480,7 +479,7 @@
     document.documentElement.dataset.theme = uiPrefs.theme;
     if (themeColorMeta) {
       const hex = getComputedStyle(document.documentElement).getPropertyValue("--theme-hex").trim();
-      themeColorMeta.setAttribute("content", hex || (dark ? "#1e1b18" : "#fffbf5"));
+      themeColorMeta.setAttribute("content", hex || (dark ? "#0f172a" : "#f8fafc"));
     }
     if (colorSchemeMeta) {
       colorSchemeMeta.setAttribute("content", uiPrefs.theme === "auto" ? "dark light" : uiPrefs.theme);
@@ -1729,42 +1728,6 @@
     openSharePicker();
   }
 
-  async function loadSmartReplies() {
-    if (!aiSuggestions) return;
-    try {
-      const body = { conversationId: activeConversationId };
-      const data = await api("/api/ai/suggest-replies", {
-        method: "POST",
-        body: JSON.stringify(body),
-      });
-      const suggestions = data.suggestions || [];
-      aiSuggestions.replaceChildren();
-      if (!suggestions.length) {
-        aiSuggestions.classList.add("hidden");
-        aiSuggestions.hidden = true;
-        return;
-      }
-      for (const text of suggestions) {
-        const btn = el(
-          "button",
-          "inline-flex h-11 min-h-11 items-center rounded-full bg-muted px-3 text-sm text-foreground",
-          text
-        );
-        btn.type = "button";
-        btn.addEventListener("click", async () => {
-          messageInput.value = text;
-          await handleSend(new Event("submit"));
-        });
-        aiSuggestions.append(btn);
-      }
-      aiSuggestions.classList.remove("hidden");
-      aiSuggestions.classList.add("flex");
-      aiSuggestions.hidden = false;
-    } catch {
-      aiSuggestions.classList.add("hidden");
-      aiSuggestions.hidden = true;
-    }
-  }
 
   function urlBase64ToUint8Array(base64String) {
     const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
@@ -2185,26 +2148,36 @@
     let host = row.querySelector("[data-reactions]");
     const list = message.reactions || [];
     if (!list.length) {
-      if (host) host.remove();
+      if (host) host.replaceChildren();
       return;
     }
     if (!host) {
-      host = el("div", "mt-2 flex flex-wrap gap-1");
+      host = el("span", "flex min-w-0 flex-wrap items-center gap-1");
       host.setAttribute("data-reactions", "");
-      const bubble = row.querySelector("[data-bubble]");
-      if (bubble) bubble.append(host);
+      const foot = row.querySelector("[data-msg-foot]");
+      if (foot) foot.prepend(host);
+      else {
+        const bubble = row.querySelector("[data-bubble]");
+        if (bubble) bubble.append(host);
+      }
     }
     host.replaceChildren();
     for (const reaction of list) {
       const btn = el(
         "button",
-        `inline-flex h-11 min-h-11 items-center gap-1 rounded-full px-3 text-sm ${
-          reaction.mine ? "bg-primary/20 text-foreground" : "bg-muted text-foreground"
+        `inline-flex h-6 min-h-6 items-center gap-0.5 rounded-full px-2 text-[0.7rem] leading-none ring-1 ${
+          reaction.mine
+            ? "bg-primary/15 text-foreground ring-primary/35"
+            : "bg-background/80 text-foreground ring-border/80"
         }`
       );
       btn.type = "button";
-      btn.append(el("span", "", reaction.emoji), el("span", "text-xs text-muted-foreground", String(reaction.count)));
+      btn.append(
+        el("span", "text-sm leading-none", reaction.emoji),
+        el("span", "tabular-nums text-muted-foreground", String(reaction.count))
+      );
       btn.setAttribute("aria-pressed", String(Boolean(reaction.mine)));
+      btn.setAttribute("aria-label", `Reaktion ${reaction.emoji}, ${reaction.count}`);
       btn.addEventListener("click", () => toggleReaction(message.id, reaction.emoji));
       host.append(btn);
     }
@@ -2341,10 +2314,9 @@
     return mark;
   }
 
-  function appendMessageStatusBadges(bubble, message) {
-    const badges = [];
+  function appendMessageStatusBadges(host, message) {
     if (message.starred) {
-      badges.push(
+      host.append(
         statusMark(
           "Gemerkt",
           ["M16 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8Z", "M16 3v5h5"],
@@ -2353,22 +2325,10 @@
       );
     }
     if (message.editedAt) {
-      badges.push(
-        statusMark(
-          "Bearbeitet",
-          ["M12 20h9", "M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"],
-          "text-muted-foreground"
-        )
-      );
+      const edited = el("span", "text-[0.65rem] leading-none", "bearbeitet");
+      edited.setAttribute("data-msg-edited", "");
+      host.append(edited);
     }
-    if (!badges.length) return;
-    bubble.classList.add("pr-8");
-    const cluster = el(
-      "span",
-      "pointer-events-none absolute right-2 top-2 flex items-center gap-0.5"
-    );
-    for (const badge of badges) cluster.append(badge);
-    bubble.append(cluster);
   }
 
   function buildMessageRow(message) {
@@ -2385,7 +2345,7 @@
 
     const bubble = el(
       "div",
-      `relative w-full px-3 py-2 leading-snug ${
+      `relative w-full px-3.5 pt-2 pb-2.5 leading-snug ${
         message.deleted
           ? "rounded-2xl bg-muted text-muted-foreground ring-1 ring-border"
           : mine
@@ -2542,17 +2502,20 @@
         appendMessageText(bubble, message, "break-words whitespace-pre-wrap text-sm sm:text-base");
         appendLinkPreview(bubble, message);
       }
-      appendMessageStatusBadges(bubble, message);
     }
 
-    const foot = el("span", "mt-1 flex items-center justify-end gap-1");
-    foot.append(
-      el("time", "text-[0.7rem] leading-none", formatListTime(message.createdAt))
-    );
+    const foot = el("span", "mt-1.5 flex min-w-0 items-end gap-2");
+    foot.setAttribute("data-msg-foot", "");
+    const reactionHost = el("span", "flex min-w-0 flex-wrap items-center gap-1");
+    reactionHost.setAttribute("data-reactions", "");
+    const meta = el("span", "ml-auto flex shrink-0 items-center justify-end gap-1 whitespace-nowrap");
+    if (!message.deleted) appendMessageStatusBadges(meta, message);
+    meta.append(el("time", "text-[0.7rem] leading-none", formatListTime(message.createdAt)));
     const status = receiptStatus(message);
     if (mine && (status || activeConversation()?.type === "dm") && !message.deleted) {
-      foot.append(receiptTicks(status || "sent"));
+      meta.append(receiptTicks(status || "sent"));
     }
+    foot.append(reactionHost, meta);
     bubble.append(foot);
 
     col.append(bubble);
@@ -2716,7 +2679,6 @@
       appendMessage(message, { scroll: false });
     }
     messageList.scrollTop = messageList.scrollHeight;
-    loadSmartReplies();
   }
 
   function conversationLabel(conv) {
@@ -2988,7 +2950,7 @@
       convList.append(
         el(
           "li",
-          "px-4 py-4 text-sm leading-snug text-muted-foreground",
+          "px-4 py-5 text-sm leading-snug text-muted-foreground",
           "Noch keine Chats. Tippe +, um eine Unterhaltung zu starten."
         )
       );
@@ -3475,7 +3437,6 @@
         emptyHint.remove();
       }
       appendMessage(message);
-      if (currentUser && message.userId !== currentUser.id) loadSmartReplies();
     });
 
     socket.on("message:edited", (message) => {

@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" id="theme-color-meta" content="#fffbf5" />
+    <meta name="theme-color" id="theme-color-meta" content="#f8fafc" />
     <meta name="color-scheme" id="color-scheme-meta" content="dark light" />
     <meta name="description" content="MyChat — Echtzeit-Nachrichten mit privaten Chats" />
     <meta name="application-name" content="MyChat" />
@@ -37,7 +37,7 @@
           document.documentElement.classList.toggle("dark", dark);
           document.documentElement.dataset.theme = theme;
           var meta = document.getElementById("theme-color-meta");
-          if (meta) meta.setAttribute("content", dark ? "#1e1b18" : "#fffbf5");
+          if (meta) meta.setAttribute("content", dark ? "#0f172a" : "#f8fafc");
           applyBubble("own", prefs.bubbleOwn);
           applyBubble("peer", prefs.bubblePeer);
         } catch (err) {
@@ -87,78 +87,58 @@
     <style>
       :root {
         --app-height: 100dvh;
-        --background: 255 251 245;
-        --foreground: 41 37 36;
-        --muted: 245 232 216;
-        --muted-foreground: 112 104 98;
+        --background: 248 250 252;
+        --foreground: 15 23 42;
+        --muted: 226 232 240;
+        --muted-foreground: 100 116 139;
         --card: 255 255 255;
-        --border: 236 220 198;
-        --primary: 14 116 144;
+        --border: 203 213 225;
+        --primary: 13 148 136;
         --primary-foreground: 255 255 255;
-        --input: 255 248 240;
-        --bubble-own: 254 243 199;
-        --bubble-own-fg: 41 37 36;
-        --bubble-peer: 224 242 254;
-        --bubble-peer-fg: 41 37 36;
-        --wallpaper-tint: 251 191 36;
-        --dot: 41 37 36;
-        --theme-hex: #fffbf5;
+        --input: 241 245 249;
+        --bubble-own: 204 251 241;
+        --bubble-own-fg: 19 78 74;
+        --bubble-peer: 255 255 255;
+        --bubble-peer-fg: 15 23 42;
+        --wallpaper-tint: 13 148 136;
+        --dot: 15 23 42;
+        --theme-hex: #f8fafc;
       }
 
       html.dark {
-        --background: 30 27 24;
-        --foreground: 250 245 238;
-        --muted: 58 52 46;
-        --muted-foreground: 180 172 164;
-        --card: 42 37 34;
-        --border: 64 56 50;
-        --primary: 125 211 224;
-        --primary-foreground: 15 23 32;
-        --input: 42 37 34;
-        --bubble-own: 61 79 88;
-        --bubble-own-fg: 250 245 238;
-        --bubble-peer: 45 52 64;
-        --bubble-peer-fg: 250 245 238;
-        --wallpaper-tint: 125 211 224;
-        --dot: 250 245 238;
-        --theme-hex: #1e1b18;
+        --background: 15 23 42;
+        --foreground: 241 245 249;
+        --muted: 30 41 59;
+        --muted-foreground: 148 163 184;
+        --card: 30 41 59;
+        --border: 51 65 85;
+        --primary: 45 212 191;
+        --primary-foreground: 15 23 42;
+        --input: 30 41 59;
+        --bubble-own: 17 94 89;
+        --bubble-own-fg: 240 253 250;
+        --bubble-peer: 30 41 59;
+        --bubble-peer-fg: 241 245 249;
+        --wallpaper-tint: 45 212 191;
+        --dot: 241 245 249;
+        --theme-hex: #0f172a;
       }
 
       html {
-        font-size: 18px;
+        font-size: 112.5%;
+        -webkit-text-size-adjust: 100%;
+        text-size-adjust: 100%;
       }
 
-      /* Chatkarten und Thread +1px; Login, Dock, Overlays bleiben bei 18px. */
-      #conv-list .text-xs,
-      #thread-active .text-xs {
-        font-size: calc(0.75rem + 1px);
-      }
-      #conv-list .text-sm,
-      #thread-active .text-sm {
-        font-size: calc(0.875rem + 1px);
-      }
-      #conv-list .text-base,
-      #thread-active .text-base {
-        font-size: calc(1rem + 1px);
-      }
-      #thread-active .text-\[0\.7rem\] {
-        font-size: calc(0.7rem + 1px);
-      }
-      @media (min-width: 640px) {
-        #thread-active .sm\:text-base {
-          font-size: calc(1rem + 1px);
-        }
-      }
-
-      /* Eingabezeile nur Schrift −3px, Layout unverändert. */
+      /* Composer slightly smaller, still rem so it tracks the root. */
       #form-message .text-xs {
-        font-size: calc(0.75rem + 1px - 3px);
+        font-size: 0.6875rem;
       }
       #form-message .text-sm {
-        font-size: calc(0.875rem + 1px - 3px);
+        font-size: 0.8125rem;
       }
       #form-message .text-base {
-        font-size: calc(1rem + 1px - 3px);
+        font-size: 0.9375rem;
       }
 
       html,
@@ -211,11 +191,13 @@
         color: rgb(var(--bubble-peer-fg));
       }
 
-      [data-bubble="own"] time {
+      [data-bubble="own"] time,
+      [data-bubble="own"] [data-msg-edited] {
         color: rgb(var(--bubble-own-fg) / 0.62);
       }
 
-      [data-bubble="peer"] time {
+      [data-bubble="peer"] time,
+      [data-bubble="peer"] [data-msg-edited] {
         color: rgb(var(--bubble-peer-fg) / 0.62);
       }
 
@@ -283,12 +265,13 @@
         overflow: hidden;
         isolation: isolate;
         touch-action: pan-y;
-        border-radius: 1rem;
-        background-color: rgb(var(--card));
-        box-shadow: 0 0 0 1px rgb(var(--border));
+        border-radius: 0;
+        background-color: rgb(var(--background));
+        box-shadow: none;
+        border-bottom: 1px solid rgb(var(--border) / 0.55);
       }
       .conv-swipe.is-selected {
-        box-shadow: 0 0 0 1px rgb(var(--primary));
+        box-shadow: none;
       }
       button.conv-action {
         position: absolute;
@@ -335,8 +318,8 @@
         overflow: hidden;
         border: 0;
         border-radius: 0;
-        padding: 0.625rem 0.75rem;
-        background-color: rgb(var(--card));
+        padding: 0.7rem 1rem;
+        background-color: rgb(var(--background));
         background-image: none;
         color: inherit;
         font: inherit;
@@ -690,7 +673,7 @@
           </div>
 
           <div id="screen-chats" class="user-list flex min-h-0 flex-1 flex-col overflow-y-auto">
-            <ul id="conv-list" class="flex flex-col gap-2 px-3 py-2" role="list"></ul>
+            <ul id="conv-list" class="flex flex-col" role="list"></ul>
           </div>
 
           <div id="screen-contacts" class="user-list hidden min-h-0 flex-1 flex-col overflow-y-auto px-2 py-2">
@@ -842,8 +825,6 @@
                   Abbrechen
                 </button>
               </div>
-
-              <div id="ai-suggestions" class="mb-2 hidden flex-wrap gap-2" hidden></div>
 
               <div
                 id="record-bar"
