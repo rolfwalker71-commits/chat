@@ -290,12 +290,17 @@
   let recordStopTimer = null;
   let recordMime = "";
 
-  const timeFormatter = new Intl.DateTimeFormat("de-DE", {
-    day: "2-digit",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  function pad2(value) {
+    return String(value).padStart(2, "0");
+  }
+
+  /** Immer 24h: dd.mm.yyyy hh:mm */
+  function formatDateTime(iso) {
+    if (!iso) return "";
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) return "";
+    return `${pad2(date.getDate())}.${pad2(date.getMonth() + 1)}.${date.getFullYear()} ${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+  }
 
   const coordFormatter = new Intl.NumberFormat("de-DE", {
     minimumFractionDigits: 4,
@@ -922,30 +927,11 @@
   }
 
   function formatTime(iso) {
-    if (!iso) return "";
-    try {
-      return timeFormatter.format(new Date(iso));
-    } catch {
-      return "";
-    }
+    return formatDateTime(iso);
   }
 
   function formatListTime(iso) {
-    if (!iso) return "";
-    try {
-      const date = new Date(iso);
-      const now = new Date();
-      const sameDay =
-        date.getFullYear() === now.getFullYear() &&
-        date.getMonth() === now.getMonth() &&
-        date.getDate() === now.getDate();
-      if (sameDay) {
-        return new Intl.DateTimeFormat("de-DE", { hour: "2-digit", minute: "2-digit" }).format(date);
-      }
-      return new Intl.DateTimeFormat("de-DE", { day: "2-digit", month: "2-digit" }).format(date);
-    } catch {
-      return "";
-    }
+    return formatDateTime(iso);
   }
 
   function setAdminFilter(mode) {
@@ -995,11 +981,14 @@
         text.append(el("p", "mt-1 text-xs text-muted-foreground", `Registriert ${formatTime(user.createdAt)}`));
       }
       if (user.resetCode) {
+        const until = user.resetExpiresAt
+          ? `gültig bis ${formatDateTime(user.resetExpiresAt)}`
+          : "30 Min gültig";
         text.append(
           el(
             "p",
             "mt-2 break-all rounded-xl bg-muted px-3 py-2 font-mono text-sm text-foreground",
-            `Code ${user.resetCode} — 30 Min gültig`
+            `Code ${user.resetCode} — ${until}`
           )
         );
       }
@@ -1352,12 +1341,7 @@
   }
 
   function formatEta(iso) {
-    if (!iso) return "";
-    try {
-      return new Intl.DateTimeFormat("de-DE", { hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
-    } catch {
-      return "";
-    }
+    return formatDateTime(iso);
   }
 
   function previewText(message) {
