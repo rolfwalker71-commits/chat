@@ -1,15 +1,13 @@
 # Baut das App-Image und veröffentlicht es in der GitHub Container Registry.
 # Image: ghcr.io/rolfwalker71-commits/chat
 #
-# Das Paket wurde zuerst lokal per User-PAT nach GHCR geschoben und ist dadurch
-# nicht mit diesem Repo verknüpft. GITHUB_TOKEN bekommt dann
-# permission_denied: read_package. Solange das so ist, loggt der Workflow mit
-# dem Repository-Secret GHCR_TOKEN (classic PAT, write:packages) ein.
-# Nach dem Verknüpfen unter Package-Settings → Connect repository und
-# Manage Actions access (Rolle Write) kann GHCR_TOKEN entfernt werden; der
-# Login fällt dann auf GITHUB_TOKEN zurück.
-# Sichtbarkeit ggf. unter https://github.com/users/rolfwalker71-commits/packages
-# auf Public stellen, falls fremde Hosts pullen sollen.
+# Login nutzt GITHUB_TOKEN (packages: write). Ein separates PAT-Secret ist
+# nicht nötig und war die Ursache für `denied: denied` am Registry-Login.
+# Paket-Sichtbarkeit (public/private) steuert nur, wer pullen darf — nicht den Push.
+#
+# Falls der Push mit permission_denied: write_package scheitert: unter
+# https://github.com/users/rolfwalker71-commits/packages/container/chat/settings
+# das Repo verbinden und unter Manage Actions access die Rolle Write vergeben.
 
 name: Publish to GHCR
 
@@ -33,17 +31,17 @@ jobs:
       packages: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Lowercase image name
         run: echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Docker metadata
         id: meta
