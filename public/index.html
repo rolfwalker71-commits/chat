@@ -603,10 +603,10 @@
           class="flex min-h-0 w-full flex-col bg-background lg:w-[min(26rem,38vw)] lg:border-r lg:border-border"
           aria-label="Chats"
         >
-          <header class="safe-t safe-x flex min-h-14 shrink-0 items-center gap-2 border-b border-border bg-card px-2 py-1.5">
-            <img src="/icons/logo.svg" alt="" width="36" height="36" class="h-9 w-9 shrink-0" />
+          <header class="safe-t safe-x flex min-h-16 shrink-0 items-center gap-2.5 border-b border-border bg-card px-3 py-2">
+            <img src="/icons/logo.svg" alt="" width="48" height="48" class="h-12 w-12 shrink-0" />
             <div class="min-w-0 flex-1">
-              <h1 class="break-words text-lg font-semibold leading-snug text-foreground">MyChat</h1>
+              <h1 class="break-words text-2xl font-semibold leading-snug text-foreground">MyChat</h1>
             </div>
             <button
               type="button"
@@ -969,23 +969,33 @@
                   class="inline-flex h-12 w-12 min-h-11 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
                   aria-label="Senden"
                 >
-                  <svg class="h-7 w-7" viewBox="90 50 360 380" aria-hidden="true">
-                    <mask id="send-logo-dots">
+                  <svg class="h-7 w-7" viewBox="72 68 376 412" fill="none" aria-hidden="true">
+                    <mask id="send-logo-face">
                       <rect width="512" height="512" fill="white" />
-                      <circle cx="300" cy="268" r="20" fill="black" />
-                      <circle cx="348" cy="268" r="20" fill="black" />
-                      <circle cx="396" cy="268" r="20" fill="black" />
+                      <circle cx="232" cy="248" r="22" fill="black" />
+                      <circle cx="312" cy="248" r="22" fill="black" />
+                      <path
+                        d="M232 312c18 28 62 28 80 0"
+                        stroke="black"
+                        stroke-width="14"
+                        stroke-linecap="round"
+                        fill="none"
+                      />
                     </mask>
-                    <path
+                    <rect x="96" y="92" width="196" height="156" rx="54" fill="currentColor" opacity="0.4" />
+                    <path fill="currentColor" opacity="0.4" d="M156 234 104 286 188 256Z" />
+                    <rect
+                      x="128"
+                      y="148"
+                      width="288"
+                      height="244"
+                      rx="80"
                       fill="currentColor"
-                      opacity="0.4"
-                      d="M118 148c0-48.6 39.4-88 88-88h86c48.6 0 88 39.4 88 88v46c0 48.6-39.4 88-88 88h-18l-54 46 12-46h-26c-48.6 0-88-39.4-88-88v-46Z"
+                      mask="url(#send-logo-face)"
                     />
-                    <path
-                      fill="currentColor"
-                      mask="url(#send-logo-dots)"
-                      d="M168 214c0-52.9 42.9-96 96-96h92c52.9 0 96 43.1 96 96v58c0 52.9-43.1 96-96 96h-22l-62 52 14-52h-22c-53.1 0-96-43.1-96-96v-58Z"
-                    />
+                    <path fill="currentColor" d="M272 376 214 456 322 400Z" />
+                    <circle cx="238" cy="254" r="10" fill="currentColor" />
+                    <circle cx="318" cy="254" r="10" fill="currentColor" />
                   </svg>
                 </button>
               </div>

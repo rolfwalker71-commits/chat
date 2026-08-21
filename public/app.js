@@ -1498,37 +1498,52 @@
       return svg;
     }
     svg.setAttribute("class", "h-7 w-7");
-    svg.setAttribute("viewBox", "90 50 360 380");
-    const mask = document.createElementNS("http://www.w3.org/2000/svg", "mask");
-    mask.setAttribute("id", "send-logo-dots");
-    const maskBg = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-    maskBg.setAttribute("width", "512");
-    maskBg.setAttribute("height", "512");
-    maskBg.setAttribute("fill", "white");
-    mask.append(maskBg);
-    for (const cx of [300, 348, 396]) {
-      const hole = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-      hole.setAttribute("cx", String(cx));
-      hole.setAttribute("cy", "268");
-      hole.setAttribute("r", "20");
-      hole.setAttribute("fill", "black");
-      mask.append(hole);
-    }
-    const back = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    back.setAttribute("fill", "currentColor");
-    back.setAttribute("opacity", "0.4");
-    back.setAttribute(
-      "d",
-      "M118 148c0-48.6 39.4-88 88-88h86c48.6 0 88 39.4 88 88v46c0 48.6-39.4 88-88 88h-18l-54 46 12-46h-26c-48.6 0-88-39.4-88-88v-46Z"
+    svg.setAttribute("viewBox", "72 68 376 412");
+    svg.setAttribute("fill", "none");
+    const ns = "http://www.w3.org/2000/svg";
+    const node = (name, attrs) => {
+      const el = document.createElementNS(ns, name);
+      for (const [key, value] of Object.entries(attrs)) el.setAttribute(key, value);
+      return el;
+    };
+    const mask = node("mask", { id: "send-logo-face" });
+    mask.append(
+      node("rect", { width: "512", height: "512", fill: "white" }),
+      node("circle", { cx: "232", cy: "248", r: "22", fill: "black" }),
+      node("circle", { cx: "312", cy: "248", r: "22", fill: "black" }),
+      node("path", {
+        d: "M232 312c18 28 62 28 80 0",
+        stroke: "black",
+        "stroke-width": "14",
+        "stroke-linecap": "round",
+        fill: "none",
+      })
     );
-    const front = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    front.setAttribute("fill", "currentColor");
-    front.setAttribute("mask", "url(#send-logo-dots)");
-    front.setAttribute(
-      "d",
-      "M168 214c0-52.9 42.9-96 96-96h92c52.9 0 96 43.1 96 96v58c0 52.9-43.1 96-96 96h-22l-62 52 14-52h-22c-53.1 0-96-43.1-96-96v-58Z"
+    svg.append(
+      mask,
+      node("rect", {
+        x: "96",
+        y: "92",
+        width: "196",
+        height: "156",
+        rx: "54",
+        fill: "currentColor",
+        opacity: "0.4",
+      }),
+      node("path", { fill: "currentColor", opacity: "0.4", d: "M156 234 104 286 188 256Z" }),
+      node("rect", {
+        x: "128",
+        y: "148",
+        width: "288",
+        height: "244",
+        rx: "80",
+        fill: "currentColor",
+        mask: "url(#send-logo-face)",
+      }),
+      node("path", { fill: "currentColor", d: "M272 376 214 456 322 400Z" }),
+      node("circle", { cx: "238", cy: "254", r: "10", fill: "currentColor" }),
+      node("circle", { cx: "318", cy: "254", r: "10", fill: "currentColor" })
     );
-    svg.append(mask, back, front);
     return svg;
   }
 
